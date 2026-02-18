@@ -2,7 +2,6 @@ package az.zeynalov.memtable;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Random;
 
@@ -13,8 +12,8 @@ public class SkipList {
   private final static int NODE_POINTER_SIZE = Integer.BYTES;
   private final static int NODE_ARRAY_LENGTH_SIZE = Integer.BYTES;
 
-  private Arena arena;
-  private Random random;
+  private final Arena arena;
+  private final Random random;
 
   private int head;
   private int currenLevel;
@@ -36,25 +35,22 @@ public class SkipList {
 
     for (int i = currenLevel; i >= 0; i--) {
       while (true) {
-        List<Integer> currentNodeNextPointers = readNextNodes(currentNodePointer);
-        int tempOffset = currentNodeNextPointers.get(i);
-        if (arena.isNull(tempOffset)) {
+        int tempNodePointer = readIthNextNode(i, currentNodePointer);
+        if (isNull(tempNodePointer)) {
           break;
         }
-        Header tempHeader = getHeader(tempOffset);
+        Header tempHeader = getHeader(tempNodePointer);
 
         if (compareKeys(tempHeader.key(), key) >= 0) {
           break;
         }
-        currentNodePointer = tempOffset;
+        currentNodePointer = tempNodePointer;
       }
     }
 
-    currentNodePointer = currentNodePointer + Integer.BYTES;
+    currentNodePointer = readIthNextNode(0, currentNodePointer);
 
-    boolean isNull = (arena.readInt(currentNodePointer) == -1);
-
-    if (!isNull) {
+    if (!isNull(currentNodePointer)) {
       Header tempHeader = getHeader(currentNodePointer);
       if (compareKeys(tempHeader.key(), key) == 0) {
         return tempHeader;
@@ -64,32 +60,29 @@ public class SkipList {
   }
 
   public void insert(Header header) {
-    List<Integer> update = new ArrayList<>(Collections.nCopies(MAX_LEVEL + 1, null));
+    int[] update = new int[MAX_LEVEL + 1];
     int currentNodePointer = head;
 
     for (int i = currenLevel; i >= 0; i--) {
       while (true) {
-        List<Integer> currentNodeNextPointers = readNextNodes(currentNodePointer);
-        int tempOffset = currentNodeNextPointers.get(i);
-        if (arena.isNull(tempOffset)) {
+        int tempNodePointer = readIthNextNode(i, currentNodePointer);
+        if (isNull(tempNodePointer)) {
           break;
         }
-        Header tempHeader = getHeader(tempOffset);
+        Header tempHeader = getHeader(tempNodePointer);
 
         if (compareKeys(tempHeader.key(), header.key()) >= 0) {
           break;
         }
-        currentNodePointer = tempOffset;
+        currentNodePointer = tempNodePointer;
       }
 
-      update.set(i, currentNodePointer);
+      update[i] = currentNodePointer;
     }
 
-    currentNodePointer = currentNodePointer + Integer.BYTES;
+    currentNodePointer = readIthNextNode(0, currentNodePointer);
 
-    boolean isNull = (arena.readInt(currentNodePointer) == -1);
-
-    if (!isNull) {
+    if (!isNull(currentNodePointer)) {
       Header tempHeader = getHeader(currentNodePointer);
       if (compareKeys(tempHeader.key(), header.key()) == 0) {
         return;
@@ -100,22 +93,19 @@ public class SkipList {
 
     if (newLevel > currenLevel) {
       for (int i = currenLevel + 1; i <= newLevel; i++) {
-        update.set(i, head);
+        update[i] = head;
       }
       currenLevel = newLevel;
     }
 
-    int newNode = createNewNodePointers(newLevel + 1);
-
-    writeHeader(header);
-
-    List<Integer> newNodeNextPointers = readNextNodeOffsets(newNode);
+    int newNode = createNodeWithHeader(newLevel + 1, header);
 
     for (int i = 0; i <= newLevel; i++) {
-      int nextNode = newNodeNextPointers.get(i);
-      int updateNextNode = readIthNextNode(i, update.get(i));
+      int nextNode = getIthNextNodeOffset(i, newNode);
+      int updateNextNode = readIthNextNode(i, update[i]);
       arena.writeInt(nextNode, updateNextNode);
-      arena.writeInt(getIthNextNodeOffset(i, update.get(i)), newNode);
+      int updateNodeOffset = getIthNextNodeOffset(i, update[i]);
+      arena.writeInt(updateNodeOffset, newNode);
     }
   }
 
@@ -135,15 +125,15 @@ public class SkipList {
       return Byte.compareUnsigned(a.get(aPos + mismatch), b.get(bPos + mismatch));
     }
 
-    return len1 - len2;
+    return Integer.compare(len1, len2);
   }
 
   private Header getHeader(int offsetOfNode) {
     int headerOffset = skipNextNodePointers(offsetOfNode);
     Pair<Integer, Integer> keyPayload = arena.readVarint(headerOffset);
 
-    int keySize = keyPayload.first();
-    int keyOffset = headerOffset + keyPayload.second();
+    int keySize = keyPayload.value();
+    int keyOffset = headerOffset + keyPayload.numberOfBytes();
 
     ByteBuffer key = arena.read(keyOffset, keySize);
     int SN_Offset = keyOffset + keySize;
@@ -168,21 +158,40 @@ public class SkipList {
     arena.writeInt(offset, header.SN());
   }
 
+  private int createNodeWithHeader(int numberOfLevels, Header header) {
+    int varintSize = arena.getVarintSize(header.keySize());
+    int keySize = header.keySize();
+    int SN_Size = Integer.BYTES;
+
+    int nodePointersSize = NODE_ARRAY_LENGTH_SIZE + numberOfLevels * NODE_POINTER_SIZE;
+    int headerSize = varintSize + keySize + SN_Size;
+    int totalSize = nodePointersSize + headerSize;
+
+    int offset = arena.allocate(totalSize);
+
+    arena.writeInt(offset, numberOfLevels);
+    int tempOffset = offset + NODE_ARRAY_LENGTH_SIZE;
+    for (int i = 0; i < numberOfLevels; i++) {
+      arena.writeInt(tempOffset + (NODE_POINTER_SIZE * i), -1);
+    }
+
+    int headerOffset = offset + nodePointersSize;
+    arena.writeVarint(header.keySize(), headerOffset);
+    headerOffset += varintSize;
+    arena.write(headerOffset, header.key());
+    headerOffset += keySize;
+    arena.writeInt(headerOffset, header.SN());
+
+    return offset;
+  }
 
   private int skipNextNodePointers(int offsetOfNode) {
     int sizeOfNodes = arena.readInt(offsetOfNode);
-    return offsetOfNode + (sizeOfNodes + 1) * NODE_POINTER_SIZE;
+    return offsetOfNode + NODE_ARRAY_LENGTH_SIZE + NODE_POINTER_SIZE * sizeOfNodes;
   }
 
-  private List<Integer> readNextNodeOffsets(int offset) {
-    int sizeOfNodes = arena.readInt(offset);
-    List<Integer> temp = new ArrayList<>();
-    int tempOffset = offset + NODE_POINTER_SIZE;
-
-    for (int i = 0; i < sizeOfNodes; i++) {
-      temp.add(tempOffset + NODE_POINTER_SIZE * i);
-    }
-    return temp;
+  private boolean isNull(int value) {
+    return value == -1;
   }
 
   private List<Integer> readNextNodes(int offset) {
@@ -195,11 +204,11 @@ public class SkipList {
     return temp;
   }
 
-  private int createNewNodePointers(int level) {
-    int offset = arena.allocate((level + 1) * NODE_POINTER_SIZE);
-    arena.writeInt(offset, level);
-    int tempOffset = offset + NODE_POINTER_SIZE;
-    for (int i = 0; i < level; i++) {
+  private int createNewNodePointers(int numberOfLevels) {
+    int offset = arena.allocate(NODE_ARRAY_LENGTH_SIZE + numberOfLevels * NODE_POINTER_SIZE);
+    arena.writeInt(offset, numberOfLevels);
+    int tempOffset = offset + NODE_ARRAY_LENGTH_SIZE;
+    for (int i = 0; i < numberOfLevels; i++) {
       arena.writeInt(tempOffset + (NODE_POINTER_SIZE * i), -1);
     }
 
@@ -207,14 +216,13 @@ public class SkipList {
   }
 
   private int readIthNextNode(int index, int offset) {
-    int nodeOffset = offset + (NODE_POINTER_SIZE * (index + 1));
-    return arena.readInt(nodeOffset);
+    int nextNodeOffset = offset + (NODE_ARRAY_LENGTH_SIZE + NODE_POINTER_SIZE * index);
+    return arena.readInt(nextNodeOffset);
   }
 
   private int getIthNextNodeOffset(int index, int offset) {
-    return offset + (NODE_POINTER_SIZE * (index + 1));
+    return offset + (NODE_ARRAY_LENGTH_SIZE + NODE_POINTER_SIZE * index);
   }
-
 
   private int randomLevel() {
     int level = 0;

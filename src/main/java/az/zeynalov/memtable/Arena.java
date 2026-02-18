@@ -29,10 +29,6 @@ public class Arena {
     return offset;
   }
 
-  public boolean isNull(int offset){
-    return availableOffset.get() < offset || offset == -1;
-  }
-
   public Pair<Integer, Integer> readVarint(int offset) {
     memory.position(offset);
     int value = 0;
@@ -91,10 +87,7 @@ public class Arena {
 
 
   public ByteBuffer read(int offset, int length){
-    ByteBuffer view = memory.duplicate();
-    view.position(offset);
-    view.limit(offset + length);
-    return view.slice();
+    return memory.slice(offset, length);
   }
 
   public int readInt(int offset){
