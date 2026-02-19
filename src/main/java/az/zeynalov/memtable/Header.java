@@ -1,10 +1,10 @@
 package az.zeynalov.memtable;
 
-import java.nio.ByteBuffer;
+import java.lang.foreign.MemorySegment;
+import java.util.Objects;
 
 public record Header(
    int keySize,
-   ByteBuffer key,
+   MemorySegment key,
    int SN){
-
 }
