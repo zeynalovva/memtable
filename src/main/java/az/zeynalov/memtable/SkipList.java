@@ -160,22 +160,6 @@ public class SkipList {
     return new Header(keySize, key, SN);
   }
 
-  private void writeHeader(Header header) {
-    int varintSize = getVarintSize(header.keySize());
-    int keySize = header.keySize();
-    int SN_Size = Integer.BYTES;
-
-    int totalSize = varintSize + keySize + SN_Size;
-
-    int offset = arena.allocate(totalSize);
-
-    arena.writeVarint(header.keySize(), offset);
-    offset += varintSize;
-    arena.writeBytes(offset, header.key());
-    offset += keySize;
-    arena.writeInt(offset, header.SN());
-  }
-
   private int createNodeWithHeader(int numberOfLevels, Header header) {
     int varintSize = getVarintSize(header.keySize());
     int keySize = header.keySize();
