@@ -108,6 +108,42 @@ public class ArenaImplTest {
   }
 
   @Test
+  public void writeLong_andReadLong_success() {
+    arena.allocate(Long.BYTES);
+    arena.writeLong(0, 123456789L);
+    long result = arena.readLong(0);
+    assertEquals(123456789L, result);
+  }
+
+  @Test
+  public void readLong_offsetExceedsSize_throwsException() {
+    assertThrows(ArenaCapacityException.class, () -> arena.readLong(0));
+  }
+
+  @Test
+  public void writeLong_offsetExceedsSize_throwsException() {
+    assertThrows(ArenaCapacityException.class, () -> arena.writeLong(100, 42L));
+  }
+
+  @Test
+  public void writeByte_andReadByte_success() {
+    arena.allocate(Byte.BYTES);
+    arena.writeByte(0, (byte) 0x7F);
+    byte result = arena.readByte(0);
+    assertEquals((byte) 0x7F, result);
+  }
+
+  @Test
+  public void readByte_offsetExceedsSize_throwsException() {
+    assertThrows(ArenaCapacityException.class, () -> arena.readByte(0));
+  }
+
+  @Test
+  public void writeByte_offsetExceedsSize_throwsException() {
+    assertThrows(ArenaCapacityException.class, () -> arena.writeByte(100, (byte) 1));
+  }
+
+  @Test
   public void close_canBeCalledMultipleTimes() {
     arena.close();
     assertDoesNotThrow(() -> arena.close());

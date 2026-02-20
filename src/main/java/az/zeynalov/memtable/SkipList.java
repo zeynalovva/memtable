@@ -13,6 +13,7 @@ public class SkipList {
   private final static int MAX_LEVEL = 12;
   private final static int NODE_POINTER_SIZE = Integer.BYTES;
   private final static int NODE_ARRAY_LENGTH_SIZE = Integer.BYTES;
+  private final static int OPERATION_TYPE_SIZE = Byte.BYTES;
 
   private final Arena arena;
   private final Random random;
@@ -126,7 +127,7 @@ public class SkipList {
     if (keyComparison != 0) {
       return keyComparison;
     }
-    return Integer.compare(b.SN(), a.SN());
+    return Long.compare(b.SN(), a.SN());
   }
 
   private int compareKeys(MemorySegment a, MemorySegment b){
@@ -152,21 +153,25 @@ public class SkipList {
 
     int keySize = keyPayload.value();
     int keyOffset = headerOffset + keyPayload.numberOfBytes();
+    int SN_Size = Long.BYTES;
 
     MemorySegment key = arena.readBytes(keyOffset, keySize);
     int SN_Offset = keyOffset + keySize;
-    int SN = arena.readInt(SN_Offset);
+    long SN = arena.readLong(SN_Offset);
+    int typeOffset = SN_Offset + SN_Size;
+    byte type = arena.readByte(typeOffset);
 
-    return new Header(keySize, key, SN);
+    return new Header(keySize, key, SN, type);
   }
 
   private int createNodeWithHeader(int numberOfLevels, Header header) {
     int varintSize = getVarintSize(header.keySize());
     int keySize = header.keySize();
-    int SN_Size = Integer.BYTES;
+    int SN_Size = Long.BYTES;
+    int typeSize = Byte.BYTES;
 
     int nodePointersSize = NODE_ARRAY_LENGTH_SIZE + numberOfLevels * NODE_POINTER_SIZE;
-    int headerSize = varintSize + keySize + SN_Size;
+    int headerSize = varintSize + keySize + SN_Size + typeSize;
     int totalSize = nodePointersSize + headerSize;
 
     int offset = arena.allocate(totalSize);
@@ -182,8 +187,9 @@ public class SkipList {
     headerOffset += varintSize;
     arena.writeBytes(headerOffset, header.key());
     headerOffset += keySize;
-    arena.writeInt(headerOffset, header.SN());
-
+    arena.writeLong(headerOffset, header.SN());
+    headerOffset += SN_Size;
+    arena.writeByte(headerOffset, header.type());
     return offset;
   }
 
@@ -194,16 +200,6 @@ public class SkipList {
 
   private boolean isNull(int value) {
     return value == -1;
-  }
-
-  private List<Integer> readNextNodes(int offset) {
-    int sizeOfNodes = arena.readInt(offset);
-    List<Integer> temp = new ArrayList<>();
-    for (int i = 0; i < sizeOfNodes; i++) {
-      temp.add(readIthNextNode(i, offset));
-    }
-
-    return temp;
   }
 
   private int createNewNodePointers(int numberOfLevels) {

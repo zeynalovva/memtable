@@ -6,6 +6,6 @@ import java.util.Objects;
 public record Header(
    int keySize,
    MemorySegment key,
-   int SN,
+   long SN,
    byte type){
 }

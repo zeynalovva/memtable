@@ -9,7 +9,11 @@ public interface Arena {
   void writeVarint(int offset, int value);
   MemorySegment readBytes(int offset, int length);
   int readInt(int offset);
+  long readLong(int offset);
+  byte readByte(int offset);
   void writeInt(int offset, int payload);
   void writeBytes(int offset, MemorySegment payload);
   int getArenaSize();
+  void writeByte(int headerOffset, byte type);
+  void writeLong(int headerOffset, long sn);
 }

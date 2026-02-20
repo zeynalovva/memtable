@@ -12,35 +12,6 @@ public class Main {
 
   public static void main(String[] args) {
 
-    ArenaImpl arenaImpl = new ArenaImpl();
-    SkipList skipList = new SkipList(arenaImpl);
-    skipList.init();
-
-    int key = 10000;
-    int SN = 120;
-    Header header = new Header(4, toMemorySegment(key), SN);
-    skipList.insert(header);
-
-
-    key = 11;
-    SN = 114;
-    header = new Header(4, toMemorySegment(key), SN);
-    skipList.insert(header);
-
-    key = 13;
-    SN = 112;
-    header = new Header(4, toMemorySegment(key), SN);
-    skipList.insert(header);
-
-    key = 50;
-    SN = 150;
-    header = new Header(4, toMemorySegment(key), SN);
-    skipList.insert(header);
-
-    key = 40;
-    SN = 140;
-    header = new Header(4, toMemorySegment(key), SN);
-    skipList.insert(header);
 
 
   }

@@ -17,6 +17,8 @@ public class ArenaImpl implements az.zeynalov.memtable.Arena, AutoCloseable {
   private final static long ALLOCATED_MEMORY_SIZE = 64L * (1 << 20);
   private static final ValueLayout.OfInt UNALIGNED_INT =
       ValueLayout.JAVA_INT.withByteAlignment(1);
+  private static final ValueLayout.OfLong UNALIGNED_LONG =
+      ValueLayout.JAVA_LONG.withByteAlignment(1);
   private final AtomicInteger availableOffset;
   private final Arena offHeapScope;
 
@@ -99,11 +101,39 @@ public class ArenaImpl implements az.zeynalov.memtable.Arena, AutoCloseable {
     return memory.get(UNALIGNED_INT, offset);
   }
 
+  public long readLong(int offset){
+    if(offset + Long.BYTES > availableOffset.get()){
+      throw ArenaCapacityException.of(ErrorMessage.ARENA_LIMIT_EXCEED);
+    }
+    return memory.get(UNALIGNED_LONG, offset);
+  }
+
+  public byte readByte(int offset){
+    if(offset + Byte.BYTES > availableOffset.get()){
+      throw ArenaCapacityException.of(ErrorMessage.ARENA_LIMIT_EXCEED);
+    }
+    return memory.get(ValueLayout.JAVA_BYTE, offset);
+  }
+
   public void writeBytes(int offset, MemorySegment payload) {
     if (offset > availableOffset.get()) {
       throw ArenaCapacityException.of(ErrorMessage.ARENA_LIMIT_EXCEED);
     }
     MemorySegment.copy(payload, 0, this.memory, offset, payload.byteSize());
+  }
+
+  public void writeByte(int offset, byte payload){
+    if (offset >= availableOffset.get()) {
+      throw ArenaCapacityException.of(ErrorMessage.ARENA_LIMIT_EXCEED);
+    }
+    memory.set(ValueLayout.JAVA_BYTE, offset, payload);
+  }
+
+  public void writeLong(int offset, long payload){
+    if (offset >= availableOffset.get()) {
+      throw ArenaCapacityException.of(ErrorMessage.ARENA_LIMIT_EXCEED);
+    }
+    memory.set(UNALIGNED_LONG, offset, payload);
   }
 
   public void writeInt(int offset, int payload) {
