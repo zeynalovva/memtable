@@ -3,7 +3,6 @@ package az.zeynalov.tests;
 import static org.junit.jupiter.api.Assertions.*;
 
 import az.zeynalov.memtable.ArenaImpl;
-import az.zeynalov.memtable.Pair;
 import az.zeynalov.memtable.exception.ArenaCapacityException;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -87,9 +86,9 @@ public class ArenaImplTest {
   public void writeVarint_andReadVarint_smallValue() {
     arena.allocate(10);
     arena.writeVarint(0, 127);
-    Pair<Integer, Integer> result = arena.readVarint(0);
-    assertEquals(127, result.value());
-    assertEquals(1, result.numberOfBytes());
+    long result = arena.readVarint(0);
+    assertEquals(127, unpackFirst(result));
+    assertEquals(1, unpackSecond(result));
   }
 
   @Test
@@ -97,9 +96,9 @@ public class ArenaImplTest {
     arena.allocate(10);
     int value = 300;
     arena.writeVarint(0, value);
-    Pair<Integer, Integer> result = arena.readVarint(0);
-    assertEquals(value, result.value());
-    assertTrue(result.numberOfBytes() > 1);
+    long result = arena.readVarint(0);
+    assertEquals(value, unpackFirst(result));
+    assertTrue(unpackSecond(result) > 1);
   }
 
   @Test
@@ -147,6 +146,13 @@ public class ArenaImplTest {
   public void close_canBeCalledMultipleTimes() {
     arena.close();
     assertDoesNotThrow(() -> arena.close());
+  }
+  private int unpackFirst(long packed) {
+    return (int) (packed >> 32);
+  }
+
+  private int unpackSecond(long packed) {
+    return (int) packed;
   }
 }
 

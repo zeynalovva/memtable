@@ -1,3 +1,5 @@
+# Unoptimized
+
 Benchmark                                        (size)   Mode  Cnt   Score    Error   Units
 SkipListBenchmark.getMiss_arena                    1000  thrpt    5   6.648 ±  0.099  ops/us
 SkipListBenchmark.getMiss_arena                   10000  thrpt    5   6.062 ±  0.209  ops/us
@@ -49,3 +51,62 @@ SkipListBenchmark.scan_arena                       1000   avgt    5   6.578 ±  
 SkipListBenchmark.scan_arena                      10000   avgt    5  66.051 ±  1.452   us/op
 SkipListBenchmark.scan_treeMap                     1000   avgt    5   4.236 ±  0.436   us/op
 SkipListBenchmark.scan_treeMap                    10000   avgt    5  87.413 ± 18.427   us/op
+
+
+# Optimized
+
+Benchmark                                    (size)   Mode  Cnt    Score    Error   Units
+SkipListBenchmark.getMiss_arena                1000  thrpt    5   29.151 ±  0.179  ops/us
+SkipListBenchmark.getMiss_arena               10000  thrpt    5   16.037 ±  0.040  ops/us
+SkipListBenchmark.getMiss_arena              100000  thrpt    5   19.031 ±  0.457  ops/us
+SkipListBenchmark.getMiss_treeMap              1000  thrpt    5   75.502 ±  0.874  ops/us
+SkipListBenchmark.getMiss_treeMap             10000  thrpt    5   55.630 ±  0.761  ops/us
+SkipListBenchmark.getMiss_treeMap            100000  thrpt    5   40.528 ±  0.268  ops/us
+SkipListBenchmark.get_arena                    1000  thrpt    5    6.225 ±  0.039  ops/us
+SkipListBenchmark.get_arena                   10000  thrpt    5    5.044 ±  0.030  ops/us
+SkipListBenchmark.get_arena                  100000  thrpt    5    3.847 ±  0.023  ops/us
+SkipListBenchmark.get_concurrentSkipListMap    1000  thrpt    5   28.924 ±  0.924  ops/us
+SkipListBenchmark.get_concurrentSkipListMap   10000  thrpt    5   16.251 ±  0.433  ops/us
+SkipListBenchmark.get_concurrentSkipListMap  100000  thrpt    5   11.307 ±  0.451  ops/us
+SkipListBenchmark.get_treeMap                  1000  thrpt    5   52.561 ±  1.637  ops/us
+SkipListBenchmark.get_treeMap                 10000  thrpt    5   24.825 ±  4.414  ops/us
+SkipListBenchmark.get_treeMap                100000  thrpt    5   17.444 ±  0.273  ops/us
+SkipListBenchmark.insert_arena                 1000  thrpt    5    6.256 ±  0.185  ops/us
+SkipListBenchmark.insert_arena                10000  thrpt    5    4.693 ±  0.058  ops/us
+SkipListBenchmark.insert_arena               100000  thrpt    5    3.980 ±  0.039  ops/us
+SkipListBenchmark.insert_treeMap               1000  thrpt    5   52.459 ±  1.102  ops/us
+SkipListBenchmark.insert_treeMap              10000  thrpt    5   23.917 ±  2.684  ops/us
+SkipListBenchmark.insert_treeMap             100000  thrpt    5   16.884 ±  0.268  ops/us
+SkipListBenchmark.scan_arena                   1000  thrpt    5    0.135 ±  0.051  ops/us
+SkipListBenchmark.scan_arena                  10000  thrpt    5    0.014 ±  0.002  ops/us
+SkipListBenchmark.scan_arena                 100000  thrpt    5    0.001 ±  0.001  ops/us
+SkipListBenchmark.scan_treeMap                 1000  thrpt    5    0.277 ±  0.011  ops/us
+SkipListBenchmark.scan_treeMap                10000  thrpt    5    0.011 ±  0.003  ops/us
+SkipListBenchmark.scan_treeMap               100000  thrpt    5    0.002 ±  0.001  ops/us
+SkipListBenchmark.getMiss_arena                1000   avgt    5    0.041 ±  0.001   us/op
+SkipListBenchmark.getMiss_arena               10000   avgt    5    0.035 ±  0.001   us/op
+SkipListBenchmark.getMiss_arena              100000   avgt    5    0.039 ±  0.001   us/op
+SkipListBenchmark.getMiss_treeMap              1000   avgt    5    0.013 ±  0.001   us/op
+SkipListBenchmark.getMiss_treeMap             10000   avgt    5    0.018 ±  0.001   us/op
+SkipListBenchmark.getMiss_treeMap            100000   avgt    5    0.025 ±  0.001   us/op
+SkipListBenchmark.get_arena                    1000   avgt    5    0.161 ±  0.001   us/op
+SkipListBenchmark.get_arena                   10000   avgt    5    0.184 ±  0.002   us/op
+SkipListBenchmark.get_arena                  100000   avgt    5    0.238 ±  0.007   us/op
+SkipListBenchmark.get_concurrentSkipListMap    1000   avgt    5    0.033 ±  0.002   us/op
+SkipListBenchmark.get_concurrentSkipListMap   10000   avgt    5    0.066 ±  0.011   us/op
+SkipListBenchmark.get_concurrentSkipListMap  100000   avgt    5    0.100 ±  0.003   us/op
+SkipListBenchmark.get_treeMap                  1000   avgt    5    0.019 ±  0.001   us/op
+SkipListBenchmark.get_treeMap                 10000   avgt    5    0.044 ±  0.015   us/op
+SkipListBenchmark.get_treeMap                100000   avgt    5    0.057 ±  0.002   us/op
+SkipListBenchmark.insert_arena                 1000   avgt    5    0.169 ±  0.003   us/op
+SkipListBenchmark.insert_arena                10000   avgt    5    0.213 ±  0.003   us/op
+SkipListBenchmark.insert_arena               100000   avgt    5    0.258 ±  0.005   us/op
+SkipListBenchmark.insert_treeMap               1000   avgt    5    0.019 ±  0.001   us/op
+SkipListBenchmark.insert_treeMap              10000   avgt    5    0.045 ±  0.008   us/op
+SkipListBenchmark.insert_treeMap             100000   avgt    5    0.059 ±  0.001   us/op
+SkipListBenchmark.scan_arena                   1000   avgt    5    6.955 ±  0.145   us/op
+SkipListBenchmark.scan_arena                  10000   avgt    5   68.727 ±  9.559   us/op
+SkipListBenchmark.scan_arena                 100000   avgt    5  673.927 ±  4.067   us/op
+SkipListBenchmark.scan_treeMap                 1000   avgt    5    3.630 ±  0.108   us/op
+SkipListBenchmark.scan_treeMap                10000   avgt    5   86.726 ± 10.184   us/op
+SkipListBenchmark.scan_treeMap               100000   avgt    5  537.842 ± 52.290   us/op
