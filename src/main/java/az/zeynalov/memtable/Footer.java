@@ -1,5 +1,7 @@
 package az.zeynalov.memtable;
 
+import java.lang.foreign.MemorySegment;
+
 public record Footer(int valueSize,
-                     byte[] value) {
+                     MemorySegment value) {
 }

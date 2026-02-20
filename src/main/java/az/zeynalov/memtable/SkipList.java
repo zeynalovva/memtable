@@ -2,8 +2,6 @@ package az.zeynalov.memtable;
 
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Random;
 import java.util.function.Consumer;
 
@@ -34,7 +32,7 @@ public class SkipList {
     this.head = createNewNodePointers(MAX_LEVEL);
   }
 
-  public Header get(Header header) {
+  public Record get(Header header) {
     int currentNodePointer = head;
 
     for (int i = currenLevel; i >= 0; i--) {
@@ -56,14 +54,15 @@ public class SkipList {
 
     if (!isNull(currentNodePointer)) {
       Header tempHeader = getHeader(currentNodePointer);
+      Footer tempFooter = getFooter(currentNodePointer);
       if (compareHeaders(tempHeader, header) == 0) {
-        return tempHeader;
+        return new Record(tempHeader, tempFooter);
       }
     }
     return null;
   }
 
-  public void insert(Header header) {
+  public void insert(Record record) {
     int[] update = new int[MAX_LEVEL + 1];
     int currentNodePointer = head;
 
@@ -75,7 +74,7 @@ public class SkipList {
         }
         Header tempHeader = getHeader(tempNodePointer);
 
-        if (compareHeaders(tempHeader, header) >= 0) {
+        if (compareHeaders(tempHeader, record.header()) >= 0) {
           break;
         }
         currentNodePointer = tempNodePointer;
@@ -88,7 +87,7 @@ public class SkipList {
 
     if (!isNull(currentNodePointer)) {
       Header tempHeader = getHeader(currentNodePointer);
-      if (compareHeaders(tempHeader, header) == 0) {
+      if (compareHeaders(tempHeader, record.header()) == 0) {
         return;
       }
     }
@@ -102,7 +101,7 @@ public class SkipList {
       currenLevel = newLevel;
     }
 
-    int newNode = createNodeWithHeader(newLevel + 1, header);
+    int newNode = createNodeWithRecord(newLevel + 1, record);
 
     for (int i = 0; i <= newLevel; i++) {
       int nextNode = getIthNextNodeOffset(i, newNode);
@@ -130,7 +129,7 @@ public class SkipList {
     return Long.compare(b.SN(), a.SN());
   }
 
-  private int compareKeys(MemorySegment a, MemorySegment b){
+  private int compareKeys(MemorySegment a, MemorySegment b) {
     long mismatchOffset = a.mismatch(b);
 
     if (mismatchOffset == -1) {
@@ -164,15 +163,39 @@ public class SkipList {
     return new Header(keySize, key, SN, type);
   }
 
-  private int createNodeWithHeader(int numberOfLevels, Header header) {
-    int varintSize = getVarintSize(header.keySize());
+  private Footer getFooter(int offsetOfNode) {
+    int headerOffset = skipNextNodePointers(offsetOfNode);
+    Pair<Integer, Integer> keyPayload = arena.readVarint(headerOffset);
+
+    int SN_Size = Long.BYTES;
+
+    int footerOffset = headerOffset + keyPayload.numberOfBytes() +
+        keyPayload.value() + SN_Size + OPERATION_TYPE_SIZE;
+
+    Pair<Integer, Integer> valuePayload = arena.readVarint(footerOffset);
+
+    int valueSize = valuePayload.value();
+    int valueOffset = footerOffset + valuePayload.numberOfBytes();
+    MemorySegment value = arena.readBytes(valueOffset, valueSize);
+
+    return new Footer(valueSize, value);
+  }
+
+  private int createNodeWithRecord(int numberOfLevels, Record record) {
+    Header header = record.header();
+    Footer footer = record.footer();
+
+    int keyVarintSize = getVarintSize(header.keySize());
     int keySize = header.keySize();
     int SN_Size = Long.BYTES;
     int typeSize = Byte.BYTES;
+    int valueVarintSize = getVarintSize(footer.valueSize());
+    int valueSize = footer.valueSize();
 
     int nodePointersSize = NODE_ARRAY_LENGTH_SIZE + numberOfLevels * NODE_POINTER_SIZE;
-    int headerSize = varintSize + keySize + SN_Size + typeSize;
-    int totalSize = nodePointersSize + headerSize;
+    int headerSize = keyVarintSize + keySize + SN_Size + typeSize;
+    int footerSize = valueVarintSize + valueSize;
+    int totalSize = nodePointersSize + headerSize + footerSize;
 
     int offset = arena.allocate(totalSize);
 
@@ -183,13 +206,18 @@ public class SkipList {
     }
 
     int headerOffset = offset + nodePointersSize;
-    arena.writeVarint(header.keySize(), headerOffset);
-    headerOffset += varintSize;
+    arena.writeVarint(headerOffset, header.keySize());
+    headerOffset += keyVarintSize;
     arena.writeBytes(headerOffset, header.key());
     headerOffset += keySize;
     arena.writeLong(headerOffset, header.SN());
     headerOffset += SN_Size;
     arena.writeByte(headerOffset, header.type());
+    headerOffset += typeSize;
+    arena.writeVarint(headerOffset, footer.valueSize());
+    headerOffset += valueVarintSize;
+    arena.writeBytes(headerOffset, footer.value());
+
     return offset;
   }
 
@@ -231,10 +259,18 @@ public class SkipList {
   }
 
   private int getVarintSize(int value) {
-    if ((value & (0xFFFFFFFF << 7)) == 0) return 1;
-    if ((value & (0xFFFFFFFF << 14)) == 0) return 2;
-    if ((value & (0xFFFFFFFF << 21)) == 0) return 3;
-    if ((value & (0xFFFFFFFF << 28)) == 0) return 4;
+    if ((value & (0xFFFFFFFF << 7)) == 0) {
+      return 1;
+    }
+    if ((value & (0xFFFFFFFF << 14)) == 0) {
+      return 2;
+    }
+    if ((value & (0xFFFFFFFF << 21)) == 0) {
+      return 3;
+    }
+    if ((value & (0xFFFFFFFF << 28)) == 0) {
+      return 4;
+    }
     return 5;
   }
 }

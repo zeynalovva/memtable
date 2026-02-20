@@ -6,7 +6,6 @@ import az.zeynalov.memtable.exception.ErrorMessage;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -68,7 +67,7 @@ public class ArenaImpl implements az.zeynalov.memtable.Arena, AutoCloseable {
     }
   }
 
-  public void writeVarint(int value, int offset) {
+  public void writeVarint(int offset, int value) {
     int currentOffset = offset;
 
     while (true) {

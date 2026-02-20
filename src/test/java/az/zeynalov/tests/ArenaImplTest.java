@@ -86,7 +86,7 @@ public class ArenaImplTest {
   @Test
   public void writeVarint_andReadVarint_smallValue() {
     arena.allocate(10);
-    arena.writeVarint(127, 0);
+    arena.writeVarint(0, 127);
     Pair<Integer, Integer> result = arena.readVarint(0);
     assertEquals(127, result.value());
     assertEquals(1, result.numberOfBytes());
@@ -96,7 +96,7 @@ public class ArenaImplTest {
   public void writeVarint_andReadVarint_largeValue() {
     arena.allocate(10);
     int value = 300;
-    arena.writeVarint(value, 0);
+    arena.writeVarint(0, value);
     Pair<Integer, Integer> result = arena.readVarint(0);
     assertEquals(value, result.value());
     assertTrue(result.numberOfBytes() > 1);
