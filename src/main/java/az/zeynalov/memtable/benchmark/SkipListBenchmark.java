@@ -1,9 +1,8 @@
 package az.zeynalov.memtable.benchmark;
 
-import az.zeynalov.memtable.ArenaImpl;
+import az.zeynalov.memtable.Arena;
 import az.zeynalov.memtable.Footer;
 import az.zeynalov.memtable.Header;
-import az.zeynalov.memtable.Record;
 import az.zeynalov.memtable.SkipList;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
@@ -34,33 +33,36 @@ public class SkipListBenchmark {
     @Param({"1000", "10000", "100000"})
     int size;
 
-    ArenaImpl arena;
+    Arena arena;
     SkipList skipList;
 
-    Record[] recordsToInsert;
+    Header[] headersToInsert;
+    Footer[] footersToInsert;
     Header[] headersToGet;
     Header missingHeader;
     int index;
 
     @Setup(Level.Trial)
     public void setup() {
-      arena = new ArenaImpl();
+      arena = new Arena();
       skipList = new SkipList(arena);
       skipList.init();
 
-      recordsToInsert = new Record[size];
+      headersToInsert = new Header[size];
+      footersToInsert = new Footer[size];
       headersToGet = new Header[size];
 
       // Pre-create all data to avoid benchmarking String/Object allocation
       for (int i = 0; i < size; i++) {
         String keyStr = "key" + String.format("%07d", i);
-        recordsToInsert[i] = createRecord(keyStr, i, "val" + i);
+        headersToInsert[i] = createHeader(keyStr, i);
+        footersToInsert[i] = createFooter("val" + i);
         headersToGet[i] = createHeader(keyStr, i);
       }
 
       // Pre-fill the skip list for the GET benchmarks
       for (int i = 0; i < size; i++) {
-        skipList.insert(recordsToInsert[i]);
+        skipList.insert(headersToInsert[i], footersToInsert[i]);
       }
 
       missingHeader = createHeader("ZZZZZZZ_missing", 999999);
@@ -72,8 +74,8 @@ public class SkipListBenchmark {
       arena.close();
     }
 
-    public Record nextRecord() {
-      return recordsToInsert[index++ % size];
+    public int nextInsertIndex() {
+      return index++ % size;
     }
 
     public Header nextHeader() {
@@ -124,7 +126,8 @@ public class SkipListBenchmark {
   public void insert_arena(ArenaState state) {
     // Note: In a real test, you'd want to reset the arena
     // but for thrpt we just keep inserting.
-    state.skipList.insert(state.nextRecord());
+    int idx = state.nextInsertIndex();
+    state.skipList.insert(state.headersToInsert[idx], state.footersToInsert[idx]);
   }
 
   @Benchmark
@@ -188,12 +191,9 @@ public class SkipListBenchmark {
     return new Header(keyBytes.length, MemorySegment.ofArray(keyBytes), sn, (byte) 0);
   }
 
-  private static Record createRecord(String key, long sn, String value) {
-    byte[] keyBytes = key.getBytes(StandardCharsets.UTF_8);
+  private static Footer createFooter(String value) {
     byte[] valBytes = value.getBytes(StandardCharsets.UTF_8);
-    Header header = new Header(keyBytes.length, MemorySegment.ofArray(keyBytes), sn, (byte) 0);
-    Footer footer = new Footer(valBytes.length, MemorySegment.ofArray(valBytes));
-    return new Record(header, footer);
+    return new Footer(valBytes.length, MemorySegment.ofArray(valBytes));
   }
 
   public static void main(String[] args) throws RunnerException {

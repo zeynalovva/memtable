@@ -2,7 +2,7 @@ package az.zeynalov.tests;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import az.zeynalov.memtable.ArenaImpl;
+import az.zeynalov.memtable.Arena;
 import az.zeynalov.memtable.exception.ArenaCapacityException;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
@@ -10,13 +10,13 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-public class ArenaImplTest {
+public class ArenaTest {
 
-  private ArenaImpl arena;
+  private Arena arena;
 
   @BeforeEach
   public void setup() {
-    this.arena = new ArenaImpl();
+    this.arena = new Arena();
   }
 
   @AfterEach
@@ -54,7 +54,7 @@ public class ArenaImplTest {
 
   @Test
   public void readInt_offsetExceedsSize_throwsException() {
-    assertThrows(ArenaCapacityException.class, () -> arena.readInt(0));
+    assertThrows(IndexOutOfBoundsException.class, () -> arena.readInt(0));
   }
 
   @Test
@@ -73,13 +73,13 @@ public class ArenaImplTest {
   @Test
   public void readBytes_exceedsSize_throwsException() {
     arena.allocate(5);
-    assertThrows(ArenaCapacityException.class, () -> arena.readBytes(0, 10));
+    assertThrows(IndexOutOfBoundsException.class, () -> arena.readBytes(0, 10));
   }
 
   @Test
   public void writeBytes_offsetExceedsSize_throwsException() {
     MemorySegment payload = MemorySegment.ofArray(new byte[]{1, 2, 3});
-    assertThrows(ArenaCapacityException.class, () -> arena.writeBytes(100, payload));
+    assertThrows(IndexOutOfBoundsException.class, () -> arena.writeBytes(100, payload));
   }
 
   @Test
@@ -116,12 +116,12 @@ public class ArenaImplTest {
 
   @Test
   public void readLong_offsetExceedsSize_throwsException() {
-    assertThrows(ArenaCapacityException.class, () -> arena.readLong(0));
+    assertThrows(IndexOutOfBoundsException.class, () -> arena.readLong(0));
   }
 
   @Test
   public void writeLong_offsetExceedsSize_throwsException() {
-    assertThrows(ArenaCapacityException.class, () -> arena.writeLong(100, 42L));
+    assertThrows(IndexOutOfBoundsException.class, () -> arena.writeLong(100, 42L));
   }
 
   @Test
@@ -134,12 +134,12 @@ public class ArenaImplTest {
 
   @Test
   public void readByte_offsetExceedsSize_throwsException() {
-    assertThrows(ArenaCapacityException.class, () -> arena.readByte(0));
+    assertThrows(IndexOutOfBoundsException.class, () -> arena.readByte(0));
   }
 
   @Test
   public void writeByte_offsetExceedsSize_throwsException() {
-    assertThrows(ArenaCapacityException.class, () -> arena.writeByte(100, (byte) 1));
+    assertThrows(IndexOutOfBoundsException.class, () -> arena.writeByte(100, (byte) 1));
   }
 
   @Test

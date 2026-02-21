@@ -2,7 +2,6 @@ package az.zeynalov.memtable;
 
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.util.Random;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Consumer;
 
@@ -12,9 +11,8 @@ public class SkipList {
   private final static int MAX_LEVEL = 12;
   private final static int NODE_POINTER_SIZE = Integer.BYTES;
   private final static int NODE_ARRAY_LENGTH_SIZE = Integer.BYTES;
-  private final static int OPERATION_TYPE_SIZE = Byte.BYTES;
-  private final ThreadLocal<int[]> updateNodesCache = ThreadLocal.withInitial(() -> new int[MAX_LEVEL + 1]);
-
+  private final ThreadLocal<int[]> updateNodesCache = ThreadLocal.withInitial(
+      () -> new int[MAX_LEVEL + 1]);
 
   private final Arena arena;
 
@@ -32,7 +30,7 @@ public class SkipList {
     this.head = createNewNodePointers(MAX_LEVEL);
   }
 
-  public Record get(Header header) {
+  public int get(Header header) {
     int currentNodePointer = head;
 
     for (int i = currenLevel; i >= 0; i--) {
@@ -53,15 +51,19 @@ public class SkipList {
 
     if (!isNull(currentNodePointer)) {
       if (compareNodeWithTarget(currentNodePointer, header.key(), header.SN()) == 0) {
-        Footer tempFooter = getFooter(currentNodePointer);
-        Header tempHeader = getHeader(currentNodePointer);
-        return new Record(tempHeader, tempFooter);
+        return currentNodePointer;
       }
     }
-    return null;
+    return -1;
   }
 
-  public void insert(Record record) {
+  /**
+   * Layout of node:
+   *    [number of levels] -> [next node pointer for each level] ->
+   * -> [key varint size] -> [key] -> [SN] -> [type] -> [value varint size] ->
+   * -> [value]
+   */
+  public void insert(Header header, Footer footer) {
     int[] update = updateNodesCache.get();
     int currentNodePointer = head;
 
@@ -71,7 +73,7 @@ public class SkipList {
         if (isNull(tempNodePointer)) {
           break;
         }
-        if (compareNodeWithTarget(tempNodePointer, record.header().key(), record.header().SN())
+        if (compareNodeWithTarget(tempNodePointer, header.key(), header.SN())
             >= 0) {
           break;
         }
@@ -84,7 +86,7 @@ public class SkipList {
     currentNodePointer = readIthNextNode(0, currentNodePointer);
 
     if (!isNull(currentNodePointer)) {
-      if (compareNodeWithTarget(currentNodePointer, record.header().key(), record.header().SN())
+      if (compareNodeWithTarget(currentNodePointer, header.key(), header.SN())
           == 0) {
         return;
       }
@@ -99,7 +101,7 @@ public class SkipList {
       currenLevel = newLevel;
     }
 
-    int newNode = createNodeWithRecord(newLevel + 1, record);
+    int newNode = createNodeWithRecord(newLevel + 1, header, footer);
 
     for (int i = 0; i <= newLevel; i++) {
       int nextNode = getIthNextNodeOffset(i, newNode);
@@ -110,33 +112,15 @@ public class SkipList {
     }
   }
 
-  public void forEach(Consumer<Header> consumer) {
+  public void forEach(Consumer<Integer> consumer) {
     int currentNodePointer = readIthNextNode(0, head);
     while (!isNull(currentNodePointer)) {
-      Header header = getHeader(currentNodePointer);
-      consumer.accept(header);
+      consumer.accept(currentNodePointer);
       currentNodePointer = readIthNextNode(0, currentNodePointer);
     }
   }
 
-  public int compareHeaders(Header a, Header b) {
-    long mismatchOffset = a.key().mismatch(b.key());
-
-    if (mismatchOffset == -1) {
-      return Long.compare(b.SN(), a.SN());
-    }
-
-    if (mismatchOffset == a.key().byteSize() || mismatchOffset == b.key().byteSize()) {
-      return Long.compare(a.key().byteSize(), b.key().byteSize());
-    }
-
-    return Byte.compareUnsigned(
-        a.key().get(ValueLayout.JAVA_BYTE, mismatchOffset),
-        b.key().get(ValueLayout.JAVA_BYTE, mismatchOffset)
-    );
-  }
-
-  public int compareNodeWithTarget(int nodeOffset, MemorySegment targetKey, long targetSN) {
+  private int compareNodeWithTarget(int nodeOffset, MemorySegment targetKey, long targetSN) {
     int sizeOfNodes = arena.readInt(nodeOffset);
     int metadataOffset = nodeOffset + NODE_ARRAY_LENGTH_SIZE + (NODE_POINTER_SIZE * sizeOfNodes);
 
@@ -174,46 +158,7 @@ public class SkipList {
     return Byte.compareUnsigned(b1, b2);
   }
 
-  private Header getHeader(int offsetOfNode) {
-    int headerOffset = skipNextNodePointers(offsetOfNode);
-    long keyPayload = arena.readVarint(headerOffset);
-
-    int keySize = unpackFirst(keyPayload);
-    int keyOffset = headerOffset + unpackSecond(keyPayload);
-    int SN_Size = Long.BYTES;
-
-    MemorySegment key = arena.readBytes(keyOffset, keySize);
-    int SN_Offset = keyOffset + keySize;
-    long SN = arena.readLong(SN_Offset);
-    int typeOffset = SN_Offset + SN_Size;
-    byte type = arena.readByte(typeOffset);
-
-    return new Header(keySize, key, SN, type);
-  }
-
-  private Footer getFooter(int offsetOfNode) {
-    int headerOffset = skipNextNodePointers(offsetOfNode);
-    long keyPayload = arena.readVarint(headerOffset);
-    int keySize = unpackFirst(keyPayload);
-    int keyVarintSize = unpackSecond(keyPayload);
-
-    int SN_Size = Long.BYTES;
-
-    int footerOffset = headerOffset + keyVarintSize +
-        keySize + SN_Size + OPERATION_TYPE_SIZE;
-
-    long valuePayload = arena.readVarint(footerOffset);
-
-    int valueSize = unpackFirst(valuePayload);
-    int valueOffset = footerOffset + unpackSecond(valuePayload);
-    MemorySegment value = arena.readBytes(valueOffset, valueSize);
-
-    return new Footer(valueSize, value);
-  }
-
-  private int createNodeWithRecord(int numberOfLevels, Record record) {
-    Header header = record.header();
-    Footer footer = record.footer();
+  private int createNodeWithRecord(int numberOfLevels, Header header, Footer footer) {
 
     int keyVarintSize = getVarintSize(header.keySize());
     int keySize = header.keySize();
@@ -249,11 +194,6 @@ public class SkipList {
     arena.writeBytes(headerOffset, footer.value());
 
     return offset;
-  }
-
-  private int skipNextNodePointers(int offsetOfNode) {
-    int sizeOfNodes = arena.readInt(offsetOfNode);
-    return offsetOfNode + NODE_ARRAY_LENGTH_SIZE + NODE_POINTER_SIZE * sizeOfNodes;
   }
 
   private boolean isNull(int value) {
@@ -302,17 +242,5 @@ public class SkipList {
       return 4;
     }
     return 5;
-  }
-
-  private long pack(int a, int b) {
-    return ((long) a << 32) | (b & 0xFFFFFFFFL);
-  }
-
-  private int unpackFirst(long packed) {
-    return (int) (packed >> 32);
-  }
-
-  private int unpackSecond(long packed) {
-    return (int) packed;
   }
 }
