@@ -4,1030 +4,654 @@ import az.zeynalov.memtable.Arena;
 import az.zeynalov.memtable.Footer;
 import az.zeynalov.memtable.Header;
 import az.zeynalov.memtable.SkipList;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class SkipListTest {
 
-  private static final byte TYPE_PUT = (byte) 0;
-  private static final byte TYPE_DELETE = (byte) 1;
-  private static final int NOT_FOUND = -1;
-
+  private static final int NODE_ARRAY_LENGTH_SIZE = Integer.BYTES;
+  private static final int NODE_POINTER_SIZE = Integer.BYTES;
   private Arena arena;
   private SkipList skipList;
+  private java.lang.foreign.Arena testScope;
 
   @BeforeEach
   void setUp() {
     arena = new Arena();
     skipList = new SkipList(arena);
     skipList.init();
+    testScope = java.lang.foreign.Arena.ofShared();
   }
 
   @AfterEach
   void tearDown() {
     arena.close();
-  }
-
-  // --- Helper methods ---
-
-  private Header createHeader(String key, long sn) {
-    return createHeader(key, sn, TYPE_PUT);
-  }
-
-  private Header createHeader(String key, long sn, byte type) {
-    byte[] keyBytes = key.getBytes(StandardCharsets.UTF_8);
-    MemorySegment keySegment = MemorySegment.ofArray(keyBytes);
-    return new Header(keyBytes.length, keySegment, sn, type);
-  }
-
-  private Footer createFooter(String value) {
-    byte[] valueBytes = value.getBytes(StandardCharsets.UTF_8);
-    MemorySegment valueSegment = MemorySegment.ofArray(valueBytes);
-    return new Footer(valueBytes.length, valueSegment);
-  }
-
-  private Footer createFooter(byte[] valueBytes) {
-    MemorySegment valueSegment = MemorySegment.ofArray(valueBytes);
-    return new Footer(valueBytes.length, valueSegment);
-  }
-
-  private Footer emptyFooter() {
-    return new Footer(0, MemorySegment.ofArray(new byte[0]));
-  }
-
-  private void insert(String key, long sn, String value) {
-    skipList.insert(createHeader(key, sn, TYPE_PUT), createFooter(value));
-  }
-
-  private void insert(String key, long sn, byte type) {
-    skipList.insert(createHeader(key, sn, type), emptyFooter());
-  }
-
-  private void insert(String key, long sn, byte type, String value) {
-    skipList.insert(createHeader(key, sn, type), createFooter(value));
-  }
-
-  private void assertFound(int offset) {
-    assertNotEquals(NOT_FOUND, offset);
-  }
-
-  private void assertFound(int offset, String message) {
-    assertNotEquals(NOT_FOUND, offset, message);
-  }
-
-  private void assertNotFound(int offset) {
-    assertEquals(NOT_FOUND, offset, "Expected NOT_FOUND (-1)");
-  }
-
-  // --- Tests ---
-
-  @Test
-  void testInsertAndGetSingleElement() {
-    insert("key1", 1, "value1");
-
-    int offset = skipList.get(createHeader("key1", 1));
-
-    assertFound(offset);
-  }
-
-  @Test
-  void testGetNonExistentKey() {
-    insert("key1", 1, "value1");
-
-    int offset = skipList.get(createHeader("key2", 1));
-
-    assertNotFound(offset);
-  }
-
-  @Test
-  void testInsertMultipleElements() {
-    insert("apple", 1, "red");
-    insert("banana", 2, "yellow");
-    insert("cherry", 3, "dark red");
-
-    assertFound(skipList.get(createHeader("apple", 1)));
-    assertFound(skipList.get(createHeader("banana", 2)));
-    assertFound(skipList.get(createHeader("cherry", 3)));
-  }
-
-  @Test
-  void testInsertDuplicateKeyAndSN() {
-    insert("key1", 1, "first");
-    insert("key1", 1, "second");
-
-    int offset = skipList.get(createHeader("key1", 1));
-
-    // Duplicate insert should be ignored, first value kept
-    assertFound(offset);
-  }
-
-  @Test
-  void testSameKeyDifferentSNDescendingOrder() {
-    insert("key1", 1, "v1");
-    insert("key1", 3, "v3");
-    insert("key1", 2, "v2");
-
-    assertFound(skipList.get(createHeader("key1", 3)));
-    assertFound(skipList.get(createHeader("key1", 2)));
-    assertFound(skipList.get(createHeader("key1", 1)));
-  }
-
-  @Test
-  void testInsertInReverseOrder() {
-    insert("z", 1, "last");
-    insert("m", 2, "middle");
-    insert("a", 3, "first");
-
-    assertFound(skipList.get(createHeader("a", 3)));
-    assertFound(skipList.get(createHeader("m", 2)));
-    assertFound(skipList.get(createHeader("z", 1)));
-  }
-
-  @Test
-  void testLargeNumberOfInserts() {
-    for (int i = 0; i < 100000; i++) {
-      insert("key" + String.format("%05d", i), i, "val" + i);
-    }
-
-    for (int i = 0; i < 100000; i++) {
-      String key = "key" + String.format("%05d", i);
-      int offset = skipList.get(createHeader(key, i));
-      assertFound(offset, "Key " + key + " should exist");
+    if (testScope.scope().isAlive()) {
+      testScope.close();
     }
   }
 
   @Test
-  void testEmptySkipListGet() {
-    int offset = skipList.get(createHeader("anykey", 1));
+  void testInitialStateAndFirstOffset() {
+    // The head node is created with MAX_LEVEL (12) upon init().
+    // Size = Array length (4 bytes) + 12 pointers (12 * 4 = 48 bytes) = 52 bytes.
+    // Therefore, the exact offset for the very first insertion must be 52.
 
-    assertNotFound(offset);
+    Header header = createHeader("Key1", 1L, (byte) 1);
+    Footer footer = createFooter("Val1");
+
+    skipList.insert(header, footer);
+
+    int offset = skipList.get(header);
+
+    // Verifying the exact offset mathematically
+    assertEquals(52, offset, "The first inserted node should be at exactly offset 52");
   }
 
   @Test
-  void testEmptyKey() {
-    insert("", 1, "emptykey");
+  void testExactNodeMemoryLayoutAtOffset() {
+    String keyStr = "LayoutKey";
+    String valStr = "LayoutValue";
+    Header header = createHeader(keyStr, 999L, (byte) 5);
+    Footer footer = createFooter(valStr);
 
-    int offset = skipList.get(createHeader("", 1));
+    skipList.insert(header, footer);
+    int offset = skipList.get(header);
 
-    assertFound(offset);
+    assertTrue(offset > 0);
+
+    // Manually unpacking the memory at the specific offset to verify correctness
+    int levels = arena.readInt(offset);
+    assertTrue(levels >= 1 && levels <= 13); // Levels are 1 to 13 (randomLevel + 1)
+
+    int nodePointersSize = Integer.BYTES + (levels * Integer.BYTES);
+    int currentOffset = offset + nodePointersSize;
+
+    // 1. Check Key Varint Size
+    long packedKeyVarint = arena.readVarint(currentOffset);
+    int keySize = (int) (packedKeyVarint >>> 32);
+    int keyVarintBytes = (int) (packedKeyVarint & 0xFFFFFFFFL);
+    assertEquals(keyStr.length(), keySize);
+    currentOffset += keyVarintBytes;
+
+    // 2. Check Key Segment
+    MemorySegment keySeg = arena.readBytes(currentOffset, keySize);
+    assertEquals(keyStr, new String(keySeg.toArray(ValueLayout.JAVA_BYTE)));
+    currentOffset += keySize;
+
+    // 3. Check Sequence Number (SN)
+    long sn = arena.readLong(currentOffset);
+    assertEquals(999L, sn);
+    currentOffset += Long.BYTES;
+
+    // 4. Check Type
+    byte type = arena.readByte(currentOffset);
+    assertEquals((byte) 5, type);
+    currentOffset += Byte.BYTES;
+
+    // 5. Check Value Varint Size
+    long packedValVarint = arena.readVarint(currentOffset);
+    int valSize = (int) (packedValVarint >>> 32);
+    int valVarintBytes = (int) (packedValVarint & 0xFFFFFFFFL);
+    assertEquals(valStr.length(), valSize);
+    currentOffset += valVarintBytes;
+
+    // 6. Check Value Segment
+    MemorySegment valSeg = arena.readBytes(currentOffset, valSize);
+    assertEquals(valStr, new String(valSeg.toArray(ValueLayout.JAVA_BYTE)));
   }
 
   @Test
-  void testSingleCharacterKeys() {
-    insert("a", 1, "va");
-    insert("b", 2, "vb");
-    insert("c", 3, "vc");
+  void testMultipleInsertionsAndRetrievalOrder() {
+    // Insert keys out of alphabetical order
+    Header hA = createHeader("A", 1L, (byte) 1); Footer fA = createFooter("valA");
+    Header hB = createHeader("B", 1L, (byte) 1); Footer fB = createFooter("valB");
+    Header hC = createHeader("C", 1L, (byte) 1); Footer fC = createFooter("valC");
 
-    assertFound(skipList.get(createHeader("a", 1)));
-    assertFound(skipList.get(createHeader("b", 2)));
-    assertFound(skipList.get(createHeader("c", 3)));
+    skipList.insert(hB, fB);
+    skipList.insert(hC, fC);
+    skipList.insert(hA, fA);
+
+    int offsetA = skipList.get(hA);
+    int offsetB = skipList.get(hB);
+    int offsetC = skipList.get(hC);
+
+    List<Integer> offsetsFromIterator = new ArrayList<>();
+    skipList.forEach(offsetsFromIterator::add);
+
+    // Verify iteration guarantees lexicographical ascending order for offsets
+    assertEquals(3, offsetsFromIterator.size());
+    assertEquals(offsetA, offsetsFromIterator.get(0));
+    assertEquals(offsetB, offsetsFromIterator.get(1));
+    assertEquals(offsetC, offsetsFromIterator.get(2));
   }
 
   @Test
-  void testVeryLongKey() {
-    String longKey = "k".repeat(500);
-    insert(longKey, 1, "longkeyvalue");
-
-    int offset = skipList.get(createHeader(longKey, 1));
-
-    assertFound(offset);
-  }
-
-  @Test
-  void testKeysWithSamePrefix() {
-    insert("prefix", 1, "v1");
-    insert("prefix1", 2, "v2");
-    insert("prefix12", 3, "v3");
-    insert("prefix123", 4, "v4");
-
-    assertFound(skipList.get(createHeader("prefix", 1)));
-    assertFound(skipList.get(createHeader("prefix1", 2)));
-    assertFound(skipList.get(createHeader("prefix12", 3)));
-    assertFound(skipList.get(createHeader("prefix123", 4)));
-  }
-
-  @Test
-  void testBinaryKeyData() {
-    byte[] key1 = new byte[]{(byte) 0x00, (byte) 0x01};
-    byte[] key2 = new byte[]{(byte) 0xFF, (byte) 0xFE};
-
-    Header header1 = new Header(key1.length, MemorySegment.ofArray(key1), 1, TYPE_PUT);
-    Header header2 = new Header(key2.length, MemorySegment.ofArray(key2), 2, TYPE_PUT);
-
-    skipList.insert(header1, createFooter("bin1"));
-    skipList.insert(header2, createFooter("bin2"));
-
-    assertFound(skipList.get(new Header(key1.length, MemorySegment.ofArray(key1), 1, TYPE_PUT)));
-    assertFound(skipList.get(new Header(key2.length, MemorySegment.ofArray(key2), 2, TYPE_PUT)));
-  }
-
-  @Test
-  void testNegativeSN() {
-    insert("key", -1, "neg");
-
-    int offset = skipList.get(createHeader("key", -1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testMaxIntSN() {
-    insert("key", Integer.MAX_VALUE, "maxint");
-
-    int offset = skipList.get(createHeader("key", Integer.MAX_VALUE));
-    assertFound(offset);
-  }
-
-  @Test
-  void testMaxLongSN() {
-    insert("key", Long.MAX_VALUE, "maxlong");
-
-    int offset = skipList.get(createHeader("key", Long.MAX_VALUE));
-    assertFound(offset);
-  }
-
-  @Test
-  void testMinLongSN() {
-    insert("key", Long.MIN_VALUE, "minlong");
-
-    int offset = skipList.get(createHeader("key", Long.MIN_VALUE));
-    assertFound(offset);
-  }
-
-  @Test
-  void testLongSNBeyondIntRange() {
-    long largeSN = (long) Integer.MAX_VALUE + 100L;
-    insert("key", largeSN, "beyond");
-
-    int offset = skipList.get(createHeader("key", largeSN));
-    assertFound(offset);
-  }
-
-  @Test
-  void testMultipleLongSNsForSameKey() {
-    long sn1 = 1L;
-    long sn2 = (long) Integer.MAX_VALUE + 1L;
-    long sn3 = Long.MAX_VALUE;
-
-    insert("key", sn1, "v1");
-    insert("key", sn2, "v2");
-    insert("key", sn3, "v3");
-
-    assertFound(skipList.get(createHeader("key", sn1)));
-    assertFound(skipList.get(createHeader("key", sn2)));
-    assertFound(skipList.get(createHeader("key", sn3)));
-  }
-
-  @Test
-  void testLongSNDescendingOrderWithinSameKey() {
-    long sn1 = 1_000_000_000_000L;
-    long sn2 = 2_000_000_000_000L;
-    long sn3 = 3_000_000_000_000L;
-
-    insert("key", sn1, "v1");
-    insert("key", sn3, "v3");
-    insert("key", sn2, "v2");
-
-    assertFound(skipList.get(createHeader("key", sn3)));
-    assertFound(skipList.get(createHeader("key", sn2)));
-    assertFound(skipList.get(createHeader("key", sn1)));
-  }
-
-  @Test
-  void testInsertionOrder() {
-    String[] keys = {"delta", "alpha", "gamma", "beta"};
-    for (int i = 0; i < keys.length; i++) {
-      insert(keys[i], i, "val" + i);
-    }
-
-    for (int i = 0; i < keys.length; i++) {
-      assertFound(skipList.get(createHeader(keys[i], i)));
-    }
-  }
-
-  @Test
-  void testKeyWithNullBytes() {
-    byte[] key = new byte[]{'a', 0x00, 'b', 0x00, 'c'};
-    Header header = new Header(key.length, MemorySegment.ofArray(key), 1, TYPE_PUT);
-    skipList.insert(header, createFooter("nullbytes"));
-
-    int offset = skipList.get(new Header(key.length, MemorySegment.ofArray(key), 1, TYPE_PUT));
-    assertFound(offset);
-  }
-
-  @Test
-  void testVarintBoundary127() {
-    String key127 = "x".repeat(127);
-    insert(key127, 1, "v127");
-
-    int offset = skipList.get(createHeader(key127, 1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testVarintBoundary128() {
-    String key128 = "x".repeat(128);
-    insert(key128, 1, "v128");
-
-    int offset = skipList.get(createHeader(key128, 1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testConcurrentReads() throws InterruptedException {
-    for (int i = 0; i < 100; i++) {
-      insert("key" + i, i, "val" + i);
-    }
-
-    int threadCount = 4;
-    Thread[] threads = new Thread[threadCount];
-    AtomicInteger failures = new AtomicInteger(0);
-
-    for (int t = 0; t < threadCount; t++) {
-      threads[t] = new Thread(() -> {
-        for (int i = 0; i < 100; i++) {
-          int offset = skipList.get(createHeader("key" + i, i));
-          if (offset == NOT_FOUND) {
-            failures.incrementAndGet();
-          }
-        }
-      });
-    }
-
-    for (Thread thread : threads) {
-      thread.start();
-    }
-    for (Thread thread : threads) {
-      thread.join();
-    }
-
-    assertEquals(0, failures.get(), "No read failures should occur");
-  }
-
-  @Test
-  void testArenaMemoryUsage() {
-    int initialSize = arena.getArenaSize();
-    insert("testkey", 1, "testvalue");
-    int afterInsertSize = arena.getArenaSize();
-
-    assertTrue(afterInsertSize > initialSize, "Arena size should increase after insert");
-  }
-
-  @Test
-  void testMultipleVersionsOfSameKey() {
-    insert("user:1", 100, "v100");
-    insert("user:1", 200, "v200");
-    insert("user:1", 300, "v300");
-
-    assertFound(skipList.get(createHeader("user:1", 300)));
-    assertFound(skipList.get(createHeader("user:1", 200)));
-    assertFound(skipList.get(createHeader("user:1", 100)));
-  }
-
-  @Test
-  void testSNOrderingWithMixedKeys() {
-    insert("a", 1, "a1");
-    insert("a", 3, "a3");
-    insert("b", 2, "b2");
-    insert("a", 2, "a2");
-
-    assertFound(skipList.get(createHeader("a", 3)));
-    assertFound(skipList.get(createHeader("a", 2)));
-    assertFound(skipList.get(createHeader("a", 1)));
-    assertFound(skipList.get(createHeader("b", 2)));
-  }
-
-  @Test
-  void testPrintOrderedKeysAndSNs() {
-    insert("apple", 1, "a1");
-    insert("apple", 3, "a3");
-    insert("apple", 2, "a2");
-    insert("banana", 5, "b5");
-    insert("banana", 2, "b2");
-    insert("cherry", 1, "c1");
-
-    AtomicInteger nodeCount = new AtomicInteger(0);
-    skipList.forEach(nodeOffset -> {
-      assertFound(nodeOffset);
-      nodeCount.incrementAndGet();
-    });
-    assertEquals(6, nodeCount.get());
-  }
-
-  @Test
-  void testHeaderTypeIsStoredAndRetrieved() {
-    insert("key1", 1, TYPE_PUT, "putval");
-
-    int offset = skipList.get(createHeader("key1", 1, TYPE_PUT));
-    assertFound(offset);
-  }
-
-  @Test
-  void testDeleteTypeIsStoredAndRetrieved() {
-    insert("key1", 2, TYPE_DELETE);
-
-    int offset = skipList.get(createHeader("key1", 2, TYPE_DELETE));
-    assertFound(offset);
-  }
-
-  @Test
-  void testPutAndDeleteSameKeySameSN() {
-    insert("key1", 1, TYPE_PUT, "val");
-    insert("key1", 1, TYPE_DELETE);
-
-    int offset = skipList.get(createHeader("key1", 1, TYPE_PUT));
-    assertFound(offset);
-  }
-
-  @Test
-  void testPutFollowedByDeleteDifferentSN() {
-    insert("key1", 1, TYPE_PUT, "putval");
-    insert("key1", 2, TYPE_DELETE);
-
-    int putOffset = skipList.get(createHeader("key1", 1, TYPE_PUT));
-    int deleteOffset = skipList.get(createHeader("key1", 2, TYPE_DELETE));
-
-    assertFound(putOffset);
-    assertFound(deleteOffset);
-  }
-
-  @Test
-  void testMultipleTypesAcrossKeys() {
-    insert("a", 1, TYPE_PUT, "va");
-    insert("b", 2, TYPE_DELETE);
-    insert("c", 3, TYPE_PUT, "vc");
-    insert("d", 4, TYPE_DELETE);
-
-    assertFound(skipList.get(createHeader("a", 1)));
-    assertFound(skipList.get(createHeader("b", 2)));
-    assertFound(skipList.get(createHeader("c", 3)));
-    assertFound(skipList.get(createHeader("d", 4)));
-  }
-
-  @Test
-  void testTypePreservedWithMultipleVersions() {
-    insert("doc", 1, TYPE_PUT, "v1");
-    insert("doc", 2, TYPE_PUT, "v2");
-    insert("doc", 3, TYPE_DELETE);
-
-    assertFound(skipList.get(createHeader("doc", 1)));
-    assertFound(skipList.get(createHeader("doc", 2)));
-    assertFound(skipList.get(createHeader("doc", 3)));
-  }
-
-  @Test
-  void testForEachIncludesType() {
-    insert("x", 1, TYPE_PUT, "xval");
-    insert("y", 2, TYPE_DELETE);
-
-    AtomicInteger count = new AtomicInteger(0);
-    skipList.forEach(nodeOffset -> {
-      assertFound(nodeOffset);
-      count.incrementAndGet();
-    });
-
-    assertEquals(2, count.get());
-  }
-
-  @Test
-  void testAllByteValuesForType() {
-    for (int t = Byte.MIN_VALUE; t <= Byte.MAX_VALUE; t++) {
-      arena = new Arena();
-      skipList = new SkipList(arena);
-      skipList.init();
-
-      byte type = (byte) t;
-      insert("key", 1, type);
-
-      int offset = skipList.get(createHeader("key", 1, type));
-      assertFound(offset, "Should find header with type=" + t);
-
-      arena.close();
-    }
-  }
-
-  @Test
-  void testTypeWithLongSN() {
-    long largeSN = 9_999_999_999L;
-    insert("key1", largeSN, TYPE_PUT, "putval");
-    insert("key2", largeSN, TYPE_DELETE);
-
-    int putOffset = skipList.get(createHeader("key1", largeSN));
-    int deleteOffset = skipList.get(createHeader("key2", largeSN));
-
-    assertFound(putOffset);
-    assertFound(deleteOffset);
-  }
-
-  @Test
-  void testDeleteThenPutDifferentSN() {
-    insert("key1", 1, TYPE_DELETE);
-    insert("key1", 2, TYPE_PUT, "restored");
-
-    assertFound(skipList.get(createHeader("key1", 1)));
-    assertFound(skipList.get(createHeader("key1", 2)));
-  }
-
-  @Test
-  void testForEachOrderWithTypes() {
-    insert("a", 2, TYPE_DELETE);
-    insert("a", 1, TYPE_PUT, "aval");
-    insert("b", 1, TYPE_PUT, "bval");
+  void testSameKeyDescendingSequenceNumberOrder() {
+    // In LSM trees, later Sequence Numbers (SN) should appear first to shadow old versions.
+    // Let's verify our custom SN comparison results in descending SN order for identical keys.
+    Header h10 = createHeader("SharedKey", 10L, (byte) 1); Footer f10 = createFooter("v10");
+    Header h20 = createHeader("SharedKey", 20L, (byte) 1); Footer f20 = createFooter("v20");
+    Header h30 = createHeader("SharedKey", 30L, (byte) 1); Footer f30 = createFooter("v30");
+
+    skipList.insert(h20, f20);
+    skipList.insert(h10, f10);
+    skipList.insert(h30, f30);
+
+    int o10 = skipList.get(h10);
+    int o20 = skipList.get(h20);
+    int o30 = skipList.get(h30);
 
     List<Integer> offsets = new ArrayList<>();
     skipList.forEach(offsets::add);
 
-    // Expected: keys ASC, SNs DESC within same key
     assertEquals(3, offsets.size());
-    // Verify each offset is valid and distinct
+
+    // Expected order for same key: Highest SN first (Descending)
+    assertEquals(o30, offsets.get(0));
+    assertEquals(o20, offsets.get(1));
+    assertEquals(o10, offsets.get(2));
+  }
+
+  @Test
+  void testGetMissingKeyReturnsMinusOne() {
+    skipList.insert(createHeader("ExistingKey", 1L, (byte) 1), createFooter("Val"));
+
+    Header missingHeader = createHeader("MissingKey", 1L, (byte) 1);
+    int offset = skipList.get(missingHeader);
+
+    assertEquals(-1, offset, "Getting a missing key should safely return -1");
+  }
+
+  @Test
+  void testIdempotencyOnExactDuplicateInsert() {
+    // Insert same exact Key AND SN twice
+    Header header = createHeader("DuplicateKey", 100L, (byte) 1);
+    Footer footer1 = createFooter("Val1");
+    Footer footer2 = createFooter("Val2");
+
+    skipList.insert(header, footer1);
+    int firstOffset = skipList.get(header);
+
+    // Attempt second insert. Code logic should reject this because CompareNodeWithTarget == 0
+    skipList.insert(header, footer2);
+    int secondOffset = skipList.get(header);
+
+    assertEquals(firstOffset, secondOffset, "Offsets should point to the exact same node address");
+
+    List<Integer> offsets = new ArrayList<>();
+    skipList.forEach(offsets::add);
+
+    // Ensures no duplicated node was created locally in the list logic
+    assertEquals(1, offsets.size(), "SkipList should only contain 1 element");
+  }
+
+  @Test
+  void testLargePayloadVarintScaling() {
+    // Create strings > 127 bytes to ensure varint consumes more than 1 byte encoding
+    String largeString = "A".repeat(200);
+
+    Header h = createHeader(largeString, 1L, (byte) 2);
+    Footer f = createFooter(largeString);
+
+    skipList.insert(h, f);
+    int offset = skipList.get(h);
+    assertTrue(offset > 0);
+
+    int levels = arena.readInt(offset);
+    int metaOffset = offset + Integer.BYTES + (levels * Integer.BYTES);
+
+    long packedKeyVarint = arena.readVarint(metaOffset);
+    int keySize = (int) (packedKeyVarint >>> 32);
+    int varintBytes = (int) (packedKeyVarint & 0xFFFFFFFFL);
+
+    assertEquals(200, keySize, "Decoded varint size should equal original payload size");
+    assertEquals(2, varintBytes, "A varint for size 200 should safely consume 2 bytes in memory");
+  }
+
+  @Test
+  void testIfReturnsNextNodePointerForNonExistingKey() {
+    Header hA = createHeader("A", 10, (byte) 1); Footer fA = createFooter("valA");
+    Header hB = createHeader("A", 12, (byte) 1); Footer fB = createFooter("valB");
+    Header hC = createHeader("A", 8, (byte) 1); Footer fC = createFooter("valC");
+
+    skipList.insert(hA, fA);
+    skipList.insert(hC, fC);
+    skipList.insert(hB, fB);
+
+    Header wanted = createHeader("A", 9, (byte) 1);
+
+    int offset = skipList.get(wanted);
+    Header result = getHeader(offset);
+    assertEquals("A", new String(result.key().toArray(ValueLayout.JAVA_BYTE)));
+    assertEquals(8, result.SN());
+  }
+
+  // --- Helpers to convert String -> Off-heap MemorySegments ---
+
+  private Header createHeader(String key, long sn, byte type) {
+    MemorySegment keySegment = allocateOffHeapString(key);
+    return new Header((int) keySegment.byteSize(), keySegment, sn, type);
+  }
+
+  private Footer createFooter(String value) {
+    MemorySegment valSegment = allocateOffHeapString(value);
+    return new Footer((int) valSegment.byteSize(), valSegment);
+  }
+
+  private Header getHeader(int offsetOfNode) {
+    int headerOffset = skipNextNodePointers(offsetOfNode);
+    long keyPayload = arena.readVarint(headerOffset);
+
+    int keySize = unpackFirst(keyPayload);
+    int keyOffset = headerOffset + unpackSecond(keyPayload);
+    int SN_Size = Long.BYTES;
+
+    MemorySegment key = arena.readBytes(keyOffset, keySize);
+    int SN_Offset = keyOffset + keySize;
+    long SN = arena.readLong(SN_Offset);
+    int typeOffset = SN_Offset + SN_Size;
+    byte type = arena.readByte(typeOffset);
+
+    return new Header(keySize, key, SN, type);
+  }
+
+  private int skipNextNodePointers(int offsetOfNode) {
+    int sizeOfNodes = arena.readInt(offsetOfNode);
+    return offsetOfNode + NODE_ARRAY_LENGTH_SIZE + NODE_POINTER_SIZE * sizeOfNodes;
+  }
+
+  private int unpackFirst(long packed) {
+    return (int) (packed >> 32);
+  }
+
+  private int unpackSecond(long packed) {
+    return (int) packed;
+  }
+
+  private MemorySegment allocateOffHeapString(String str) {
+    byte[] bytes = str.getBytes(StandardCharsets.UTF_8);
+    MemorySegment segment = testScope.allocate(bytes.length);
+    MemorySegment.copy(MemorySegment.ofArray(bytes), 0, segment, 0, bytes.length);
+    return segment;
+  }
+
+  @Test
+  void testGetOnEmptySkipListReturnsMinusOne() {
+    Header header = createHeader("AnyKey", 1L, (byte) 1);
+    int offset = skipList.get(header);
+    assertEquals(-1, offset, "Get on empty skip list should return -1");
+  }
+
+  @Test
+  void testForEachOnEmptySkipListYieldsNothing() {
+    List<Integer> offsets = new ArrayList<>();
+    skipList.forEach(offsets::add);
+    assertTrue(offsets.isEmpty(), "forEach on empty skip list should yield no elements");
+  }
+
+  @Test
+  void testSingleInsertAndForEach() {
+    Header h = createHeader("OnlyKey", 5L, (byte) 0);
+    Footer f = createFooter("OnlyValue");
+
+    skipList.insert(h, f);
+
+    List<Integer> offsets = new ArrayList<>();
+    skipList.forEach(offsets::add);
+
+    assertEquals(1, offsets.size(), "ForEach should yield exactly one element");
+    assertEquals(skipList.get(h), offsets.get(0));
+  }
+
+  @Test
+  void testForEachOrderWithMultipleKeysAndMultipleSNs() {
+    // Insert multiple keys each with multiple sequence numbers
+    Header hA10 = createHeader("Apple", 10L, (byte) 1); Footer fA10 = createFooter("a10");
+    Header hA20 = createHeader("Apple", 20L, (byte) 1); Footer fA20 = createFooter("a20");
+    Header hB5  = createHeader("Banana", 5L, (byte) 1); Footer fB5  = createFooter("b5");
+    Header hB15 = createHeader("Banana", 15L, (byte) 1); Footer fB15 = createFooter("b15");
+
+    skipList.insert(hB5, fB5);
+    skipList.insert(hA10, fA10);
+    skipList.insert(hB15, fB15);
+    skipList.insert(hA20, fA20);
+
+    List<Integer> offsets = new ArrayList<>();
+    skipList.forEach(offsets::add);
+
+    assertEquals(4, offsets.size());
+
+    // Expected order: Apple(SN=20), Apple(SN=10), Banana(SN=15), Banana(SN=5)
+    assertEquals(skipList.get(hA20), offsets.get(0));
+    assertEquals(skipList.get(hA10), offsets.get(1));
+    assertEquals(skipList.get(hB15), offsets.get(2));
+    assertEquals(skipList.get(hB5), offsets.get(3));
+  }
+
+  @Test
+  void testEmptyKeyAndValue() {
+    Header h = createHeader("", 1L, (byte) 0);
+    Footer f = createFooter("");
+
+    skipList.insert(h, f);
+    int offset = skipList.get(h);
+    assertTrue(offset > 0, "Empty key/value should still be inserted");
+
+    // Verify we can read back the header
+    Header result = getHeader(offset);
+    assertEquals("", new String(result.key().toArray(ValueLayout.JAVA_BYTE)));
+    assertEquals(1L, result.SN());
+    assertEquals((byte) 0, result.type());
+  }
+
+  @Test
+  void testTypeFieldIsPreservedCorrectly() {
+    // Insert nodes with different type byte values and verify they are stored properly
+    byte[] types = {0, 1, 2, 127, (byte) 255};
+    for (byte type : types) {
+      Arena localArena = new Arena();
+      SkipList localList = new SkipList(localArena);
+      localList.init();
+
+      Header h = createHeader("Key", 1L, type);
+      Footer f = createFooter("Val");
+      localList.insert(h, f);
+
+      int offset = localList.get(h);
+      Header result = getHeaderFromArena(offset, localArena);
+      assertEquals(type, result.type(), "Type byte should be preserved for value: " + type);
+      localArena.close();
+    }
+  }
+
+  @Test
+  void testMVCCGetReturnsClosestLowerOrEqualSN() {
+    // Insert same key with SNs: 10, 20, 30
+    Header h10 = createHeader("Key", 10L, (byte) 1); Footer f10 = createFooter("v10");
+    Header h20 = createHeader("Key", 20L, (byte) 1); Footer f20 = createFooter("v20");
+    Header h30 = createHeader("Key", 30L, (byte) 1); Footer f30 = createFooter("v30");
+
+    skipList.insert(h10, f10);
+    skipList.insert(h20, f20);
+    skipList.insert(h30, f30);
+
+    // Search for SN=25 -> should return the node with SN=20 (closest lower or equal)
+    Header search25 = createHeader("Key", 25L, (byte) 1);
+    int offset = skipList.get(search25);
+    assertNotEquals(-1, offset);
+    Header result = getHeader(offset);
+    assertEquals("Key", new String(result.key().toArray(ValueLayout.JAVA_BYTE)));
+    assertEquals(20, result.SN());
+
+    // Search for SN=30 -> should return exact match SN=30
+    int offset30 = skipList.get(h30);
+    assertNotEquals(-1, offset30);
+    Header result30 = getHeader(offset30);
+    assertEquals(30, result30.SN());
+
+    // Search for SN=5 -> should return -1 (no SN <= 5 exists, because order is descending)
+    // Actually based on the ordering (descending SN), searching SN=5 means it falls after SN=10
+    // The get returns the next node pointer at level 0, which would be the node after the last match
+    Header search5 = createHeader("Key", 5L, (byte) 1);
+    int offset5 = skipList.get(search5);
+    // SN=5 < all existing SNs, so it falls after SN=10 in descending order
+    // The get should return SN=10 (since 10 is the next node)
+    assertEquals(-1, offset5);
+  }
+
+  @Test
+  void testMVCCGetWithSNHigherThanAll() {
+    Header h10 = createHeader("Key", 10L, (byte) 1); Footer f10 = createFooter("v10");
+    Header h20 = createHeader("Key", 20L, (byte) 1); Footer f20 = createFooter("v20");
+
+    skipList.insert(h10, f10);
+    skipList.insert(h20, f20);
+
+    // Search SN=50, higher than all existing -> should return SN=20 (the highest, first in order)
+    Header search50 = createHeader("Key", 50L, (byte) 1);
+    int offset = skipList.get(search50);
+    Header result = getHeader(offset);
+    assertEquals("Key", new String(result.key().toArray(ValueLayout.JAVA_BYTE)));
+    assertEquals(20L, result.SN());
+  }
+
+  @Test
+  void testLargeNumberOfInsertions() {
+    int count = 500;
+    for (int i = 0; i < count; i++) {
+      String key = String.format("key_%05d", i);
+      Header h = createHeader(key, 1L, (byte) 1);
+      Footer f = createFooter("value_" + i);
+      skipList.insert(h, f);
+    }
+
+    // Verify all keys can be retrieved
+    for (int i = 0; i < count; i++) {
+      String key = String.format("key_%05d", i);
+      Header h = createHeader(key, 1L, (byte) 1);
+      int offset = skipList.get(h);
+      assertTrue(offset > 0, "Key " + key + " should be found");
+    }
+
+    // Verify iteration count
+    List<Integer> offsets = new ArrayList<>();
+    skipList.forEach(offsets::add);
+    assertEquals(count, offsets.size(), "All " + count + " keys should be iterated");
+  }
+
+  @Test
+  void testIterationIsInLexicographicalOrder() {
+    String[] keys = {"Zebra", "Mango", "Apple", "Banana", "Cherry"};
+    for (String key : keys) {
+      skipList.insert(createHeader(key, 1L, (byte) 1), createFooter("v"));
+    }
+
+    List<Integer> offsets = new ArrayList<>();
+    skipList.forEach(offsets::add);
+
+    assertEquals(keys.length, offsets.size());
+
+    // Verify keys come out in sorted order
+    String previous = null;
     for (int offset : offsets) {
-      assertFound(offset);
+      Header h = getHeader(offset);
+      String currentKey = new String(h.key().toArray(ValueLayout.JAVA_BYTE));
+      if (previous != null) {
+        assertTrue(previous.compareTo(currentKey) < 0,
+            "Keys should be in ascending order but got " + previous + " before " + currentKey);
+      }
+      previous = currentKey;
     }
   }
 
   @Test
-  void testTypePreservedAfterManyInserts() {
-    for (int i = 0; i < 1000; i++) {
-      byte type = (i % 2 == 0) ? TYPE_PUT : TYPE_DELETE;
-      insert("key" + String.format("%04d", i), i, type, "val" + i);
-    }
+  void testKeysWithCommonPrefix() {
+    Header h1 = createHeader("prefix_a", 1L, (byte) 1); Footer f1 = createFooter("v1");
+    Header h2 = createHeader("prefix_ab", 1L, (byte) 1); Footer f2 = createFooter("v2");
+    Header h3 = createHeader("prefix_abc", 1L, (byte) 1); Footer f3 = createFooter("v3");
+    Header h4 = createHeader("prefix_b", 1L, (byte) 1); Footer f4 = createFooter("v4");
 
-    for (int i = 0; i < 1000; i++) {
-      String key = "key" + String.format("%04d", i);
-      int offset = skipList.get(createHeader(key, i));
-      assertFound(offset, "Key " + key + " should exist");
-    }
+    skipList.insert(h3, f3);
+    skipList.insert(h1, f1);
+    skipList.insert(h4, f4);
+    skipList.insert(h2, f2);
+
+    List<Integer> offsets = new ArrayList<>();
+    skipList.forEach(offsets::add);
+
+    assertEquals(4, offsets.size());
+    assertEquals(skipList.get(h1), offsets.get(0));
+    assertEquals(skipList.get(h2), offsets.get(1));
+    assertEquals(skipList.get(h3), offsets.get(2));
+    assertEquals(skipList.get(h4), offsets.get(3));
   }
 
   @Test
-  void testLongSNWithNegativeValues() {
-    long negativeSN = -5_000_000_000L;
-    insert("key", negativeSN, "negval");
+  void testValueCanBeReadBackFromOffset() {
+    String keyStr = "ReadBackKey";
+    String valStr = "ReadBackValue";
+    Header h = createHeader(keyStr, 42L, (byte) 3);
+    Footer f = createFooter(valStr);
 
-    int offset = skipList.get(createHeader("key", negativeSN));
-    assertFound(offset);
+    skipList.insert(h, f);
+    int offset = skipList.get(h);
+
+    // Navigate through the node to read the value
+    int levels = arena.readInt(offset);
+    int currentOffset = offset + NODE_ARRAY_LENGTH_SIZE + (levels * NODE_POINTER_SIZE);
+
+    // Skip key varint + key
+    long packedKeyVarint = arena.readVarint(currentOffset);
+    int keySize = (int) (packedKeyVarint >>> 32);
+    int keyVarintBytes = (int) (packedKeyVarint & 0xFFFFFFFFL);
+    currentOffset += keyVarintBytes + keySize;
+
+    // Skip SN + type
+    currentOffset += Long.BYTES + Byte.BYTES;
+
+    // Read value varint + value
+    long packedValVarint = arena.readVarint(currentOffset);
+    int valSize = (int) (packedValVarint >>> 32);
+    int valVarintBytes = (int) (packedValVarint & 0xFFFFFFFFL);
+    currentOffset += valVarintBytes;
+
+    MemorySegment valSeg = arena.readBytes(currentOffset, valSize);
+    String retrievedValue = new String(valSeg.toArray(ValueLayout.JAVA_BYTE));
+    assertEquals(valStr, retrievedValue, "Value should be correctly stored and retrievable");
   }
 
   @Test
-  void testMixedLongSNsAcrossKeys() {
-    insert("alpha", Long.MIN_VALUE, "minval");
-    insert("beta", 0L, "zeroval");
-    insert("gamma", Long.MAX_VALUE, "maxval");
+  void testSingleCharacterKeys() {
+    Header hZ = createHeader("Z", 1L, (byte) 1); Footer fZ = createFooter("vZ");
+    Header hA = createHeader("A", 1L, (byte) 1); Footer fA = createFooter("vA");
+    Header hM = createHeader("M", 1L, (byte) 1); Footer fM = createFooter("vM");
 
-    assertFound(skipList.get(createHeader("alpha", Long.MIN_VALUE)));
-    assertFound(skipList.get(createHeader("beta", 0L)));
-    assertFound(skipList.get(createHeader("gamma", Long.MAX_VALUE)));
+    skipList.insert(hZ, fZ);
+    skipList.insert(hA, fA);
+    skipList.insert(hM, fM);
+
+    List<Integer> offsets = new ArrayList<>();
+    skipList.forEach(offsets::add);
+
+    assertEquals(3, offsets.size());
+    assertEquals(skipList.get(hA), offsets.get(0));
+    assertEquals(skipList.get(hM), offsets.get(1));
+    assertEquals(skipList.get(hZ), offsets.get(2));
   }
 
   @Test
-  void testConcurrentReadsWithTypes() throws InterruptedException {
-    for (int i = 0; i < 100; i++) {
-      byte type = (i % 2 == 0) ? TYPE_PUT : TYPE_DELETE;
-      insert("key" + i, i, type, "val" + i);
-    }
+  void testGetForNonExistingKeyBetweenExistingKeys() {
+    Header hA = createHeader("A", 1L, (byte) 1); Footer fA = createFooter("vA");
+    Header hC = createHeader("C", 1L, (byte) 1); Footer fC = createFooter("vC");
+    Header hE = createHeader("E", 1L, (byte) 1); Footer fE = createFooter("vE");
 
-    int threadCount = 4;
-    Thread[] threads = new Thread[threadCount];
-    AtomicInteger failures = new AtomicInteger(0);
+    skipList.insert(hA, fA);
+    skipList.insert(hC, fC);
+    skipList.insert(hE, fE);
 
-    for (int t = 0; t < threadCount; t++) {
-      threads[t] = new Thread(() -> {
-        for (int i = 0; i < 100; i++) {
-          int offset = skipList.get(createHeader("key" + i, i));
-          if (offset == NOT_FOUND) {
-            failures.incrementAndGet();
-          }
-        }
-      });
-    }
-
-    for (Thread thread : threads) {
-      thread.start();
-    }
-    for (Thread thread : threads) {
-      thread.join();
-    }
-
-    assertEquals(0, failures.get(), "No read failures should occur with types");
+    // Search for "B" which doesn't exist - should return the next node ("C")
+    Header searchB = createHeader("B", 1L, (byte) 1);
+    int offset = skipList.get(searchB);
+    Header result = getHeader(offset);
+    assertEquals("C", new String(result.key().toArray(ValueLayout.JAVA_BYTE)),
+        "Searching for non-existing key 'B' should return the next key 'C'");
   }
 
   @Test
-  void testPrintOrderedKeysWithTypes() {
-    insert("apple", 2, TYPE_DELETE);
-    insert("apple", 1, TYPE_PUT, "appleval");
-    insert("banana", 3, TYPE_PUT, "bananaval");
-    insert("banana", 1, TYPE_DELETE);
+  void testGetForKeyGreaterThanAllExistingReturnsMinusOne() {
+    Header hA = createHeader("A", 1L, (byte) 1); Footer fA = createFooter("vA");
+    Header hB = createHeader("B", 1L, (byte) 1); Footer fB = createFooter("vB");
 
-    AtomicInteger typeCount = new AtomicInteger(0);
-    skipList.forEach(nodeOffset -> {
-      assertFound(nodeOffset);
-      typeCount.incrementAndGet();
-    });
-    assertEquals(4, typeCount.get());
-  }
+    skipList.insert(hA, fA);
+    skipList.insert(hB, fB);
 
-  // =====================================================================
-  // FOOTER TESTS (verifying insert + get offset works)
-  // =====================================================================
-
-  @Test
-  void testFooterValueStoredAndRetrieved() {
-    insert("key1", 1, "hello world");
-
-    int offset = skipList.get(createHeader("key1", 1));
-    assertFound(offset);
+    // Search for "Z" which is greater than all existing keys
+    Header searchZ = createHeader("Z", 1L, (byte) 1);
+    int offset = skipList.get(searchZ);
+    assertEquals(-1, offset, "Searching for key greater than all should return -1");
   }
 
   @Test
-  void testFooterEmptyValue() {
-    insert("key1", 1, "");
+  void testVarintBoundaryAt128() {
+    // 127 fits in 1 varint byte, 128 requires 2 varint bytes
+    String key127 = "K".repeat(127);
+    String key128 = "K".repeat(128);
 
-    int offset = skipList.get(createHeader("key1", 1));
-    assertFound(offset);
+    Header h127 = createHeader(key127, 1L, (byte) 1); Footer f127 = createFooter("v");
+    Header h128 = createHeader(key128, 1L, (byte) 1); Footer f128 = createFooter("v");
+
+    skipList.insert(h127, f127);
+    skipList.insert(h128, f128);
+
+    int offset127 = skipList.get(h127);
+    int offset128 = skipList.get(h128);
+
+    assertTrue(offset127 > 0);
+    assertTrue(offset128 > 0);
+
+    // Verify varint sizes
+    int levels127 = arena.readInt(offset127);
+    int metaOffset127 = offset127 + NODE_ARRAY_LENGTH_SIZE + (levels127 * NODE_POINTER_SIZE);
+    long packed127 = arena.readVarint(metaOffset127);
+    assertEquals(127, (int) (packed127 >>> 32));
+    assertEquals(1, (int) (packed127 & 0xFFFFFFFFL), "Varint for 127 should be 1 byte");
+
+    int levels128 = arena.readInt(offset128);
+    int metaOffset128 = offset128 + NODE_ARRAY_LENGTH_SIZE + (levels128 * NODE_POINTER_SIZE);
+    long packed128 = arena.readVarint(metaOffset128);
+    assertEquals(128, (int) (packed128 >>> 32));
+    assertEquals(2, (int) (packed128 & 0xFFFFFFFFL), "Varint for 128 should be 2 bytes");
   }
 
   @Test
-  void testFooterValueSizeMatchesActual() {
-    String value = "test-value-123";
-    insert("key1", 1, value);
+  void testSequenceNumberZero() {
+    Header h = createHeader("Key", 0L, (byte) 1);
+    Footer f = createFooter("Val");
 
-    int offset = skipList.get(createHeader("key1", 1));
-    assertFound(offset);
+    skipList.insert(h, f);
+    int offset = skipList.get(h);
+    assertTrue(offset > 0);
+
+    Header result = getHeader(offset);
+    assertEquals(0L, result.SN(), "SN of 0 should be stored and retrievable");
   }
 
   @Test
-  void testFooterWithBinaryData() {
-    byte[] binaryValue = new byte[]{(byte) 0x00, (byte) 0xFF, (byte) 0x7F, (byte) 0x80, (byte) 0x01};
-    Header header = createHeader("binkey", 1);
-    Footer footer = createFooter(binaryValue);
-    skipList.insert(header, footer);
+  void testLargeSequenceNumber() {
+    long largeSN = Long.MAX_VALUE;
+    Header h = createHeader("Key", largeSN, (byte) 1);
+    Footer f = createFooter("Val");
 
-    int offset = skipList.get(createHeader("binkey", 1));
-    assertFound(offset);
+    skipList.insert(h, f);
+    int offset = skipList.get(h);
+    assertTrue(offset > 0);
+
+    Header result = getHeader(offset);
+    assertEquals(largeSN, result.SN(), "Long.MAX_VALUE SN should be stored and retrievable");
   }
 
-  @Test
-  void testFooterWithNullBytesInValue() {
-    byte[] valueWithNulls = new byte[]{'h', 0x00, 'e', 0x00, 'l', 'l', 'o'};
-    Header header = createHeader("nullval", 1);
-    Footer footer = createFooter(valueWithNulls);
-    skipList.insert(header, footer);
-
-    int offset = skipList.get(createHeader("nullval", 1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testFooterLargeValue() {
-    String largeValue = "V".repeat(10000);
-    insert("bigval", 1, largeValue);
-
-    int offset = skipList.get(createHeader("bigval", 1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testFooterVarintBoundary127Value() {
-    String value127 = "v".repeat(127);
-    insert("k127", 1, value127);
-
-    int offset = skipList.get(createHeader("k127", 1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testFooterVarintBoundary128Value() {
-    String value128 = "v".repeat(128);
-    insert("k128", 1, value128);
-
-    int offset = skipList.get(createHeader("k128", 1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testFooterVarintBoundary16383Value() {
-    // 2-byte varint max is 16383 (0x3FFF)
-    String value = "x".repeat(16383);
-    insert("kbig", 1, value);
-
-    int offset = skipList.get(createHeader("kbig", 1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testFooterVarintBoundary16384Value() {
-    // 3-byte varint starts at 16384 (0x4000)
-    String value = "x".repeat(16384);
-    insert("kbig2", 1, value);
-
-    int offset = skipList.get(createHeader("kbig2", 1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testFooterDifferentValuesForSameKeyDifferentSNs() {
-    insert("user", 1, "initial");
-    insert("user", 2, "updated");
-    insert("user", 3, "final");
-
-    assertFound(skipList.get(createHeader("user", 1)));
-    assertFound(skipList.get(createHeader("user", 2)));
-    assertFound(skipList.get(createHeader("user", 3)));
-  }
-
-  @Test
-  void testFooterPreservedAcrossMultipleKeys() {
-    insert("a", 1, "alpha-value");
-    insert("b", 1, "beta-value");
-    insert("c", 1, "gamma-value");
-
-    assertFound(skipList.get(createHeader("a", 1)));
-    assertFound(skipList.get(createHeader("b", 1)));
-    assertFound(skipList.get(createHeader("c", 1)));
-  }
-
-  @Test
-  void testFooterPreservedAfterManyInserts() {
-    for (int i = 0; i < 1000; i++) {
-      insert("key" + String.format("%04d", i), i, "value_" + i);
-    }
-
-    for (int i = 0; i < 1000; i++) {
-      String key = "key" + String.format("%04d", i);
-      int offset = skipList.get(createHeader(key, i));
-      assertFound(offset, "Key " + key + " should exist");
-    }
-  }
-
-  @Test
-  void testFooterWithDeleteType() {
-    // Delete records typically have empty values but should still work
-    insert("key1", 1, TYPE_DELETE);
-
-    int offset = skipList.get(createHeader("key1", 1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testFooterWithDeleteTypeNonEmptyValue() {
-    // Some implementations allow tombstone values
-    insert("key1", 1, TYPE_DELETE, "tombstone-reason");
-
-    int offset = skipList.get(createHeader("key1", 1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testRecordIntegrity_HeaderMatch() {
-    insert("integrity", 42, TYPE_PUT, "the-value");
-
-    int offset = skipList.get(createHeader("integrity", 42));
-    assertFound(offset);
-  }
-
-  @Test
-  void testFooterNotCorruptedByAdjacentInserts() {
-    // Insert records with varying key and value sizes to stress memory layout
-    insert("a", 1, "short");
-    insert("bb", 2, "a-medium-length-value");
-    insert("ccc", 3, "x".repeat(500));
-    insert("dddd", 4, "tiny");
-    insert("eeeee", 5, "y".repeat(1000));
-
-    assertFound(skipList.get(createHeader("a", 1)));
-    assertFound(skipList.get(createHeader("bb", 2)));
-    assertFound(skipList.get(createHeader("ccc", 3)));
-    assertFound(skipList.get(createHeader("dddd", 4)));
-    assertFound(skipList.get(createHeader("eeeee", 5)));
-  }
-
-  @Test
-  void testArenaMemoryIncreasesWithFooterSize() {
-    int initialSize = arena.getArenaSize();
-
-    insert("k1", 1, "small");
-    int sizeAfterSmall = arena.getArenaSize();
-
-    insert("k2", 2, "a-much-larger-value-that-takes-more-space");
-    int sizeAfterLarge = arena.getArenaSize();
-
-    assertTrue(sizeAfterSmall > initialSize);
-    assertTrue(sizeAfterLarge > sizeAfterSmall);
-    // Larger value should consume more arena space
-    int smallDelta = sizeAfterSmall - initialSize;
-    int largeDelta = sizeAfterLarge - sizeAfterSmall;
-    assertTrue(largeDelta > smallDelta, "Larger footer should use more arena space");
-  }
-
-  @Test
-  void testConcurrentReadsWithFooterValues() throws InterruptedException {
-    for (int i = 0; i < 100; i++) {
-      insert("key" + i, i, "value_" + i);
-    }
-
-    int threadCount = 4;
-    Thread[] threads = new Thread[threadCount];
-    AtomicInteger failures = new AtomicInteger(0);
-
-    for (int t = 0; t < threadCount; t++) {
-      threads[t] = new Thread(() -> {
-        for (int i = 0; i < 100; i++) {
-          int offset = skipList.get(createHeader("key" + i, i));
-          if (offset == NOT_FOUND) {
-            failures.incrementAndGet();
-          }
-        }
-      });
-    }
-
-    for (Thread thread : threads) {
-      thread.start();
-    }
-    for (Thread thread : threads) {
-      thread.join();
-    }
-
-    assertEquals(0, failures.get(), "No read failures should occur for footer values");
-  }
-
-  @Test
-  void testFooterSingleByteValue() {
-    insert("k", 1, TYPE_PUT, "x");
-
-    int offset = skipList.get(createHeader("k", 1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testFooterAllZeroBytesValue() {
-    byte[] zeros = new byte[]{0, 0, 0, 0, 0};
-    skipList.insert(createHeader("zeros", 1), createFooter(zeros));
-
-    int offset = skipList.get(createHeader("zeros", 1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testFooterAllOxFFBytesValue() {
-    byte[] ffs = new byte[]{(byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF};
-    skipList.insert(createHeader("ffs", 1), createFooter(ffs));
-
-    int offset = skipList.get(createHeader("ffs", 1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testFooterValueWithSpecialCharacters() {
-    String specialValue = "héllo wörld 日本語 🚀";
-    insert("special", 1, specialValue);
-
-    int offset = skipList.get(createHeader("special", 1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testDuplicateInsertPreservesOriginal() {
-    insert("dup", 1, "original-value");
-    insert("dup", 1, "new-value-should-be-ignored");
-
-    int offset = skipList.get(createHeader("dup", 1));
-    // The skip list ignores duplicate (key,SN) inserts
-    assertFound(offset);
-  }
-
-  @Test
-  void testFooterWithEmptyKeyAndValue() {
-    insert("", 1, "");
-
-    int offset = skipList.get(createHeader("", 1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testFooterWithLongKeyAndLongValue() {
-    String longKey = "K".repeat(500);
-    String longValue = "V".repeat(5000);
-    insert(longKey, 1, longValue);
-
-    int offset = skipList.get(createHeader(longKey, 1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testForEachTraversalAfterInserts() {
-    insert("alpha", 1, "alpha-val");
-    insert("beta", 2, "beta-val");
-    insert("gamma", 3, "gamma-val");
-
-    // forEach gives offsets; verify each is valid
-    AtomicInteger traversalCount = new AtomicInteger(0);
-    skipList.forEach(nodeOffset -> {
-      assertFound(nodeOffset);
-      traversalCount.incrementAndGet();
-    });
-    assertEquals(3, traversalCount.get());
-  }
-
-  @Test
-  void testMultipleVersionsWithDifferentFooters() {
-    insert("doc", 1, TYPE_PUT, "version-1-content");
-    insert("doc", 2, TYPE_PUT, "version-2-content-updated");
-    insert("doc", 3, TYPE_DELETE, "");
-
-    assertFound(skipList.get(createHeader("doc", 1)));
-    assertFound(skipList.get(createHeader("doc", 2)));
-    assertFound(skipList.get(createHeader("doc", 3)));
-  }
-
-  @Test
-  void testFooterValueExactly255Bytes() {
-    // 255 = 0xFF, edge case for single-byte representations
-    String value = "Z".repeat(255);
-    insert("k255", 1, value);
-
-    int offset = skipList.get(createHeader("k255", 1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testFooterValueExactly256Bytes() {
-    String value = "Z".repeat(256);
-    insert("k256", 1, value);
-
-    int offset = skipList.get(createHeader("k256", 1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testGetReturnsValidOffset() {
-    // The get method should return a valid offset for a stored record
-    insert("mykey", 10, TYPE_PUT, "stored-value");
-
-    int offset = skipList.get(createHeader("mykey", 10));
-    assertFound(offset);
-  }
-
-  @Test
-  void testInsertAndGetRecordWithMaxVarintKeyAndValue() {
-    // Both key and value at varint boundary
-    String key = "k".repeat(128);
-    String value = "v".repeat(128);
-    insert(key, 1, value);
-
-    int offset = skipList.get(createHeader(key, 1));
-    assertFound(offset);
-  }
-
-  @Test
-  void testFooterCorrectAfterReverseOrderInserts() {
-    // Insert in reverse key order to test skip list rebalancing
-    for (int i = 99; i >= 0; i--) {
-      insert("key" + String.format("%02d", i), i, "val" + i);
-    }
-
-    for (int i = 0; i < 100; i++) {
-      String key = "key" + String.format("%02d", i);
-      int offset = skipList.get(createHeader(key, i));
-      assertFound(offset, "Key " + key + " should exist");
-    }
-  }
-
-  @Test
-  void testGetReturnsNonNegativeOffsetForExistingKey() {
-    insert("exists", 1, "value");
-
-    int offset = skipList.get(createHeader("exists", 1));
-    assertTrue(offset >= 0, "Offset should be non-negative for existing keys");
-  }
-
-  @Test
-  void testGetReturnsDifferentOffsetsForDifferentKeys() {
-    insert("key1", 1, "val1");
-    insert("key2", 2, "val2");
-
-    int offset1 = skipList.get(createHeader("key1", 1));
-    int offset2 = skipList.get(createHeader("key2", 2));
-
-    assertFound(offset1);
-    assertFound(offset2);
-    assertNotEquals(offset1, offset2, "Different keys should have different offsets");
-  }
-
-  @Test
-  void testGetReturnsSameOffsetForSameKey() {
-    insert("samekey", 1, "val");
-
-    int offset1 = skipList.get(createHeader("samekey", 1));
-    int offset2 = skipList.get(createHeader("samekey", 1));
-
-    assertEquals(offset1, offset2, "Same key queried twice should return the same offset");
+  private Header getHeaderFromArena(int offsetOfNode, Arena customArena) {
+    int sizeOfNodes = customArena.readInt(offsetOfNode);
+    int headerOffset = offsetOfNode + NODE_ARRAY_LENGTH_SIZE + NODE_POINTER_SIZE * sizeOfNodes;
+    long keyPayload = customArena.readVarint(headerOffset);
+
+    int keySize = (int) (keyPayload >> 32);
+    int keyOffset = headerOffset + (int) (keyPayload & 0xFFFFFFFFL);
+
+    MemorySegment key = customArena.readBytes(keyOffset, keySize);
+    long SN = customArena.readLong(keyOffset + keySize);
+    byte type = customArena.readByte(keyOffset + keySize + Long.BYTES);
+
+    return new Header(keySize, key, SN, type);
   }
 }

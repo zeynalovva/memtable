@@ -45,7 +45,7 @@ public class Arena implements AutoCloseable {
 
     while (true) {
       if (currentOffset >= ALLOCATED_MEMORY_SIZE) {
-        throw new RuntimeException("Buffer underflow");
+        throw ArenaCapacityException.of(ErrorMessage.ARENA_SIZE_MISMATCH);
       }
 
       byte b = memory.get(ValueLayout.JAVA_BYTE, currentOffset);
@@ -61,7 +61,7 @@ public class Arena implements AutoCloseable {
       shift += 7;
 
       if (shift >= 35) {
-        throw new RuntimeException("Varint is too large (overflow)"); // TODO make errors static
+        throw ArenaCapacityException.of(ErrorMessage.ARENA_LARGE_VARINT);
       }
     }
   }
