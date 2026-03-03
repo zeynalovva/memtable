@@ -9,22 +9,33 @@ public class SkipList {
 
   private final static float PROBABILITY = 0.25F;
   private final static int MAX_LEVEL = 12;
-  private final static int NODE_POINTER_SIZE = Integer.BYTES;
-  private final static int NODE_ARRAY_LENGTH_SIZE = Integer.BYTES;
-  private final static int DEFAULT_SN_SIZE = Long.BYTES;
-  private final static int DEFAULT_TYPE_SIZE = Byte.BYTES;
 
-  private final ThreadLocal<int[]> updateNodesCache = ThreadLocal.withInitial(
+  private final static int PREFIX_LENGTH = 8;
+  private final static int SN_LENGTH = 8;
+  private final static int TYPE_LENGTH = 4;
+  private final static int KEY_LENGTH = 4;
+  private final static int VALUE_LENGTH = 4;
+  private final static int LEVEL_COUNT_LENGTH = 4;
+  private final static int POINTER_SIZE = 4;
+
+  private final static int KEY_LENGTH_OFFSET = SN_LENGTH + TYPE_LENGTH;
+  private final static int HOT_PATH_METADATA = PREFIX_LENGTH + LEVEL_COUNT_LENGTH + POINTER_SIZE;
+
+
+  private final ThreadLocal<int[]> updateCache = ThreadLocal.withInitial(
       () -> new int[MAX_LEVEL + 1]);
-  private final Arena arena;
+  private final Arena hotArena;
+  private final Arena coldArena;
 
   private int head;
   private int currenLevel;
 
+  // TODO
   // TODO make code clean
   // TODO assure concurrency
-  public SkipList(Arena arena) {
-    this.arena = arena;
+  public SkipList(Arena hotArena, Arena coldArena) {
+    this.hotArena = hotArena;
+    this.coldArena = coldArena;
     this.currenLevel = 0;
   }
 
@@ -42,63 +53,47 @@ public class SkipList {
   // equal to the searched SN.
   // It returns -1 if the key is not found or all versions of the key have SN greater than the searched SN.
   public int get(Header header) {
-    int currentNodePointer = head;
+    int currentPosition = head;
+    long targetPrefix = getPrefix(header.key());
 
     for (int i = currenLevel; i >= 0; i--) {
       while (true) {
-        int tempNodePointer = readIthNextNode(i, currentNodePointer);
-        if (isNull(tempNodePointer)) {
+        int next = readNext(i, currentPosition);
+        if (isNull(next) || compare(next, targetPrefix, header.SN(), header.key()) <= 0) {
           break;
         }
-
-        if (compareNodeWithTarget(tempNodePointer, header.key(), header.SN()) >= 0) {
-          break;
-        }
-        currentNodePointer = tempNodePointer;
+        currentPosition = next;
       }
     }
 
-    currentNodePointer = readIthNextNode(0, currentNodePointer);
-
-    return currentNodePointer;
+    currentPosition = readNext(0, currentPosition);
+    return (currentPosition != -1
+        && compare(currentPosition, targetPrefix, header.SN(), header.key()) == 0) ? currentPosition
+        : -1;
   }
 
   /**
-   * Layout of node: [number of levels] -> [next node pointer for each level] -> -> [key varint
-   * size] -> [key] -> [SN] -> [type] -> [value varint size] -> -> [value]
+   * Layout of node: prefix (8 bytes) + SN (8 bytes) + key size (4 bytes) + value size (4 bytes) +
+   * level count (4 bytes) + next node pointers (4 bytes each) + key bytes + value bytes
    */
   public void insert(Header header, Footer footer) {
-    int[] update = updateNodesCache.get();
-    int currentNodePointer = head;
+    int[] update = updateCache.get();
+    int currentPosition = head;
+    long targetPrefix = getPrefix(header.key());
 
     for (int i = currenLevel; i >= 0; i--) {
       while (true) {
-        int tempNodePointer = readIthNextNode(i, currentNodePointer);
-        if (isNull(tempNodePointer)) {
+        int next = readNext(i, currentPosition);
+        if (isNull(next) || compare(next, targetPrefix, header.SN(), header.key()) <= 0) {
           break;
         }
-        if (compareNodeWithTarget(tempNodePointer, header.key(), header.SN())
-            >= 0) {
-          break;
-        }
-        currentNodePointer = tempNodePointer;
+        currentPosition = next;
       }
 
-      update[i] = currentNodePointer;
-    }
-
-    // Reset to level 0 to check if the key already exists at the lowest level
-    currentNodePointer = readIthNextNode(0, currentNodePointer);
-
-    if (!isNull(currentNodePointer)) {
-      if (compareNodeWithTarget(currentNodePointer, header.key(), header.SN())
-          == 0) {
-        return;
-      }
+      update[i] = currentPosition;
     }
 
     int newLevel = randomLevel();
-
     if (newLevel > currenLevel) {
       for (int i = currenLevel + 1; i <= newLevel; i++) {
         update[i] = head;
@@ -110,11 +105,9 @@ public class SkipList {
 
     // Interchange update and new node pointers
     for (int i = 0; i <= newLevel; i++) {
-      int nextNode = getIthNextNodeOffset(i, newNode);
-      int updateNextNode = readIthNextNode(i, update[i]);
-      arena.writeInt(nextNode, updateNextNode);
-      int updateNodeOffset = getIthNextNodeOffset(i, update[i]);
-      arena.writeInt(updateNodeOffset, newNode);
+      int nextOfUpdate = readNext(i, update[i]);
+      writeNext(newNode, i, nextOfUpdate);
+      writeNext(update[i], i, newNode);
     }
   }
 
@@ -122,10 +115,10 @@ public class SkipList {
    * Returns the offsets of the nodes in the arena if the keys are found
    */
   public void forEach(Consumer<Integer> consumer) {
-    int currentNodePointer = readIthNextNode(0, head);
+    int currentNodePointer = readNext(0, head);
     while (!isNull(currentNodePointer)) {
       consumer.accept(currentNodePointer);
-      currentNodePointer = readIthNextNode(0, currentNodePointer);
+      currentNodePointer = readNext(0, currentNodePointer);
     }
   }
 
@@ -133,105 +126,155 @@ public class SkipList {
   /**
    * This method compares the key and SN of the node at the given offset with the target key and SN.
    * It reads the key size, key, and SN from the node and compares them with the target key and SN.
-   * The method returns:
-   * - a negative integer if the node is less than the target (node key < target key or node key == target key and node SN < target SN)
-   * - zero if the node is equal to the target (node key == target key and node SN == target SN)
-   * - a positive integer if the node is greater than the target (node key > target key or node key == target key and node SN > target SN)
-   * The comparison is done first by key and then by SN if the keys are equal.
-   * The method uses MemorySegment.mismatch to find the first byte where the node key and target key differ,
-   * which allows for efficient comparison without needing to read the entire key if they differ early on.
+   * The method returns: - a negative integer if the node is less than the target (node key < target
+   * key or node key == target key and node SN < target SN) - zero if the node is equal to the
+   * target (node key == target key and node SN == target SN) - a positive integer if the node is
+   * greater than the target (node key > target key or node key == target key and node SN > target
+   * SN) The comparison is done first by key and then by SN if the keys are equal. The method uses
+   * MemorySegment.mismatch to find the first byte where the node key and target key differ, which
+   * allows for efficient comparison without needing to read the entire key if they differ early
+   * on.
    */
-  private int compareNodeWithTarget(int nodeOffset, MemorySegment targetKey, long targetSN) {
-    int sizeOfNodes = arena.readInt(nodeOffset);
-    int metadataOffset = nodeOffset + NODE_ARRAY_LENGTH_SIZE + (NODE_POINTER_SIZE * sizeOfNodes);
+  private int compare(int nodeOffset, long targetPrefix, long targetSN,
+      MemorySegment targetKey) {
+    int keyComparison = compareKeyOnly(nodeOffset, targetPrefix, targetKey);
 
-    int currentPos = metadataOffset;
-    int keySize = 0;
-    int shift = 0;
-    while (true) {
-      byte b = arena.readByte(currentPos++);
-      keySize |= (b & 0x7F) << shift;
-      if ((b & 0x80) == 0) {
-        break;
-      }
-      shift += 7;
+    if (keyComparison == 0) {
+      int tempDataOffset = nodeOffset + LEVEL_COUNT_LENGTH + PREFIX_LENGTH;
+      int offset = hotArena.readInt(tempDataOffset);
+      long SN = coldArena.readLong(offset);
+      return Long.compare(SN, targetSN);
     }
 
+    return keyComparison;
+  }
+
+  private int compareKeyOnly(int nodeOffset, long targetPrefix, MemorySegment targetKey) {
+    long sourcePrefix = hotArena.readLong(nodeOffset);
+    int comparison = Long.compareUnsigned(targetPrefix, sourcePrefix);
+    if (comparison != 0) {
+      return comparison;
+    }
+
+    return compareRawKeys(nodeOffset, targetKey);
+  }
+
+  private int compareRawKeys(int nodeOffset, MemorySegment targetKey) {
+    int tempDataOffset = nodeOffset + LEVEL_COUNT_LENGTH + PREFIX_LENGTH;
+    int offset = hotArena.readInt(tempDataOffset);
+    int keyLength = coldArena.readInt(offset + KEY_LENGTH_OFFSET);
+    int keyOffset = offset + KEY_LENGTH_OFFSET + KEY_LENGTH + VALUE_LENGTH;
+
     long mismatch = MemorySegment.mismatch(
-        arena.getMemory(), currentPos, currentPos + keySize,
+        coldArena.getMemory(), keyOffset, keyOffset + keyLength,
         targetKey, 0, targetKey.byteSize()
     );
 
     if (mismatch == -1) {
-      long nodeSN = arena.readLong(currentPos + keySize);
-      return Long.compare(targetSN, nodeSN);
+      return 0;
     }
 
     if (mismatch == targetKey.byteSize()) {
       return 1;
     }
-    if (mismatch == keySize) {
+    if (mismatch == keyLength) {
       return -1;
     }
 
-    byte b1 = arena.readByte(currentPos + (int) mismatch);
+    byte b1 = coldArena.readByte(keyOffset + (int) mismatch);
     byte b2 = targetKey.get(ValueLayout.JAVA_BYTE, mismatch);
     return Byte.compareUnsigned(b1, b2);
   }
 
+  /**
+   * This method extracts the prefix from the given key. The prefix is defined as the first 8 bytes
+   * of the key, which are used for efficient comparison in the skip list. If the key is shorter
+   * than 8 bytes, the method constructs the prefix by reading the available bytes and padding the
+   * rest with zeros.
+   */
+
+  public long getPrefix(MemorySegment key) {
+    long size = key.byteSize();
+
+    if (size >= 8) {
+      return key.get(ValueLayout.JAVA_LONG_UNALIGNED, 0);
+    }
+    return switch ((int) size) {
+      case 0 -> 0L;
+      case 1 -> (long) (key.get(ValueLayout.JAVA_BYTE, 0) & 0xFF);
+      case 2 -> (long) (key.get(ValueLayout.JAVA_SHORT_UNALIGNED, 0) & 0xFFFF);
+      case 3 -> (long) (key.get(ValueLayout.JAVA_SHORT_UNALIGNED, 0) & 0xFFFF) |
+          ((long) (key.get(ValueLayout.JAVA_BYTE, 2) & 0xFF) << 16);
+      case 4 -> (key.get(ValueLayout.JAVA_INT_UNALIGNED, 0) & 0xFFFFFFFFL);
+      case 5 -> (key.get(ValueLayout.JAVA_INT_UNALIGNED, 0) & 0xFFFFFFFFL) |
+          ((long) (key.get(ValueLayout.JAVA_BYTE, 4) & 0xFF) << 32);
+      case 6 -> (key.get(ValueLayout.JAVA_INT_UNALIGNED, 0) & 0xFFFFFFFFL) |
+          ((long) (key.get(ValueLayout.JAVA_SHORT_UNALIGNED, 4) & 0xFFFF) << 32);
+      case 7 -> (key.get(ValueLayout.JAVA_INT_UNALIGNED, 0) & 0xFFFFFFFFL) |
+          ((long) (key.get(ValueLayout.JAVA_SHORT_UNALIGNED, 4) & 0xFFFF) << 32) |
+          ((long) (key.get(ValueLayout.JAVA_BYTE, 6) & 0xFF) << 48);
+      default -> throw new IllegalStateException("Unexpected value: " + (int) size);
+    };
+  }
+
 
   /**
-   * This method creates a new node in the arena with the given header and footer information.
-   * It calculates the total size needed for the node, allocates the memory in the arena
-   * and writes the node's metadata (number of levels, next node pointers) and the record's
-   * header and footer information into the allocated memory.
-   *
-   * Code is split into three parts: writing node metadata, writing header and writing footer.
-   * We can split the code into three methods if we want to make it more readable,
-   * but it will be less efficient, because we will have to calculate offsets multiple times and write to the arena multiple times.
+   * This method creates a new node in the arena with the given header and footer information. It
+   * calculates the total size needed for the node, allocates the memory in the arena and writes the
+   * node's metadata (number of levels, next node pointers) and the record's header and footer
+   * information into the allocated memory.
+   * <p>
+   * Code is split into three parts: writing node metadata, writing header and writing footer. We
+   * can split the code into three methods if we want to make it more readable, but it will be less
+   * efficient, because we will have to calculate offsets multiple times and write to the arena
+   * multiple times.
    */
-  private int createNodeWithRecord(int numberOfLevels, Header header, Footer footer) {
 
-    int keyVarintSize = getVarintSize(header.keySize());
+  private int createNodeWithRecord(int numberOfLevels, Header header, Footer footer) {
+    final int coldDataSize = SN_LENGTH + TYPE_LENGTH + KEY_LENGTH + VALUE_LENGTH + header.keySize()
+        + footer.valueSize();
+    final int hotDataSize =
+        PREFIX_LENGTH +LEVEL_COUNT_LENGTH + POINTER_SIZE + numberOfLevels * POINTER_SIZE;
+
+    int offset = coldArena.allocate(coldDataSize);
+    int temp = offset;
+    long prefix = getPrefix(header.key());
+    long SN = header.SN();
+    byte type = header.type();
     int keySize = header.keySize();
-    int SN_Size = DEFAULT_SN_SIZE;
-    int typeSize = DEFAULT_TYPE_SIZE;
-    int valueVarintSize = getVarintSize(footer.valueSize());
     int valueSize = footer.valueSize();
 
-    int nodePointersSize = NODE_ARRAY_LENGTH_SIZE + numberOfLevels * NODE_POINTER_SIZE;
-    int headerSize = keyVarintSize + keySize + SN_Size + typeSize;
-    int footerSize = valueVarintSize + valueSize;
-    final int totalSize = nodePointersSize + headerSize + footerSize;
+    // Write cold data first
+    coldArena.writeLong(offset, SN);
+    offset += SN_LENGTH;
+    coldArena.writeByte(offset, type);
+    offset += TYPE_LENGTH;
+    coldArena.writeInt(offset, keySize);
+    offset += KEY_LENGTH;
+    coldArena.writeInt(offset, valueSize);
+    offset += VALUE_LENGTH;
+    coldArena.writeBytes(offset, header.key());
+    offset += header.keySize();
+    coldArena.writeBytes(offset, footer.value());
 
-    int offset = arena.allocate(totalSize);
+    int newOffset = hotArena.allocate(hotDataSize);
+    int tempOffset = newOffset;
+    hotArena.writeLong(newOffset, prefix);
+    newOffset += PREFIX_LENGTH;
+    hotArena.writeInt(newOffset, numberOfLevels);
+    newOffset += LEVEL_COUNT_LENGTH;
+    hotArena.writeInt(newOffset, temp);
+    newOffset += POINTER_SIZE;
 
-    arena.writeInt(offset, numberOfLevels);
-    int tempOffset = offset + NODE_ARRAY_LENGTH_SIZE;
     for (int i = 0; i < numberOfLevels; i++) {
-      arena.writeInt(tempOffset + (NODE_POINTER_SIZE * i), -1);
+      hotArena.writeInt(newOffset + (POINTER_SIZE * i), -1);
     }
-
-    int headerOffset = offset + nodePointersSize;
-    arena.writeVarint(headerOffset, header.keySize());
-    headerOffset += keyVarintSize;
-    arena.writeBytes(headerOffset, header.key());
-    headerOffset += keySize;
-    arena.writeLong(headerOffset, header.SN());
-    headerOffset += SN_Size;
-    arena.writeByte(headerOffset, header.type());
-    headerOffset += typeSize;
-    arena.writeVarint(headerOffset, footer.valueSize());
-    headerOffset += valueVarintSize;
-    arena.writeBytes(headerOffset, footer.value());
-
-    return offset;
+    return tempOffset;
   }
 
   /**
-   * Since we use arena approach, we cannot represent null values.
-   * Because we store offsets and values in the arena,
-   * and offset cannot be negative, we can use -1 to represent null values.
+   * Since we use arena approach, we cannot represent null values. Because we store offsets and
+   * values in the arena, and offset cannot be negative, we can use -1 to represent null values.
    */
   private boolean isNull(int value) {
     return value == -1;
@@ -239,40 +282,36 @@ public class SkipList {
 
 
   /**
-   * This method is used to create a new node with the given
-   * number of levels and initialize the next node pointers to -1 (null).
+   * This method is used to create a new node with the given number of levels and initialize the
+   * next node pointers to -1 (null).
    */
   private int createNewNodePointers(int numberOfLevels) {
-    int offset = arena.allocate(NODE_ARRAY_LENGTH_SIZE + numberOfLevels * NODE_POINTER_SIZE);
-    arena.writeInt(offset, numberOfLevels);
-    int tempOffset = offset + NODE_ARRAY_LENGTH_SIZE;
+    int offset = hotArena.allocate(HOT_PATH_METADATA + numberOfLevels * POINTER_SIZE);
+    hotArena.writeInt(offset + PREFIX_LENGTH, numberOfLevels);
+    int tempOffset = offset + HOT_PATH_METADATA;
     for (int i = 0; i < numberOfLevels; i++) {
-      arena.writeInt(tempOffset + (NODE_POINTER_SIZE * i), -1);
+      hotArena.writeInt(tempOffset + (POINTER_SIZE * i), -1);
     }
 
     return offset;
   }
 
   /**
-   * Instead of just jumping to the offset of the next node,
-   * this method reads the offset of the next node at a specific level and returns it.
+   * Instead of just jumping to the offset of the next node, this method reads the offset of the
+   * next node at a specific level and returns it.
    */
-  private int readIthNextNode(int index, int offset) {
-    int nextNodeOffset = offset + (NODE_ARRAY_LENGTH_SIZE + NODE_POINTER_SIZE * index);
-    return arena.readInt(nextNodeOffset);
+  private int readNext(int index, int offset) {
+    int nextNodeOffset = offset + HOT_PATH_METADATA + (POINTER_SIZE * index);
+    return hotArena.readInt(nextNodeOffset);
+  }
+
+  private void writeNext(int nodeOffset, int level, int value) {
+    hotArena.writeInt(nodeOffset + HOT_PATH_METADATA + (POINTER_SIZE * level), value);
   }
 
   /**
-   * Helps to jump to the offset of the next node at a specific level
-   */
-  private int getIthNextNodeOffset(int index, int offset) {
-    return offset + (NODE_ARRAY_LENGTH_SIZE + NODE_POINTER_SIZE * index);
-  }
-
-  /**
-   * ThreadLocalRandom is used for optimal performance in concurrent
-   * environments. The method generates a random level for a new node
-   * based on the defined probability and maximum level.
+   * ThreadLocalRandom is used for optimal performance in concurrent environments. The method
+   * generates a random level for a new node based on the defined probability and maximum level.
    */
   private int randomLevel() {
     int level = 0;
@@ -282,22 +321,4 @@ public class SkipList {
     return level;
   }
 
-  /**
-   * Returns how many bytes a value can be encoded in varint format.
-   */
-  private int getVarintSize(int value) {
-    if ((value & (0xFFFFFFFF << 7)) == 0) {
-      return 1;
-    }
-    if ((value & (0xFFFFFFFF << 14)) == 0) {
-      return 2;
-    }
-    if ((value & (0xFFFFFFFF << 21)) == 0) {
-      return 3;
-    }
-    if ((value & (0xFFFFFFFF << 28)) == 0) {
-      return 4;
-    }
-    return 5;
-  }
 }

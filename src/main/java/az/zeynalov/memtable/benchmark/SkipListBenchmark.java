@@ -4,202 +4,223 @@ import az.zeynalov.memtable.Arena;
 import az.zeynalov.memtable.Footer;
 import az.zeynalov.memtable.Header;
 import az.zeynalov.memtable.SkipList;
+
+import java.lang.foreign.MemorySegment;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+
 import org.openjdk.jmh.annotations.*;
-import org.openjdk.jmh.infra.Blackhole;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 
-import java.lang.foreign.MemorySegment;
-import java.nio.charset.StandardCharsets;
-import java.util.TreeMap;
-import java.util.concurrent.ConcurrentSkipListMap;
-import java.util.concurrent.TimeUnit;
-
 @BenchmarkMode({Mode.Throughput, Mode.AverageTime})
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
 @Warmup(iterations = 3, time = 2)
 @Measurement(iterations = 5, time = 2)
-@Fork(value = 1, jvmArgs = {"--enable-native-access=ALL-UNNAMED"})
+@Fork(1)
 public class SkipListBenchmark {
 
-  // =========================================================================
-  //  ARENA STATE
-  // =========================================================================
-
-  @State(Scope.Thread)
-  public static class ArenaState {
+  // ──────────────────────────────────────────────────────────
+  //  State shared by all "get" benchmarks (pre-populated data)
+  // ──────────────────────────────────────────────────────────
+  @State(Scope.Benchmark)
+  public static class ArenaGetState {
     @Param({"1000", "10000", "100000"})
-    int size;
+    public int size;
 
-    Arena arena;
-    SkipList skipList;
-
-    Header[] headersToInsert;
-    Footer[] footersToInsert;
-    Header[] headersToGet;
-    Header missingHeader;
-    int index;
+    public Arena hotArena;
+    public Arena coldArena;
+    public SkipList skipList;
+    public byte[][] keys;
 
     @Setup(Level.Trial)
     public void setup() {
-      arena = new Arena();
-      skipList = new SkipList(arena);
+      hotArena = new Arena();
+      coldArena = new Arena();
+      skipList = new SkipList(hotArena, coldArena);
       skipList.init();
-
-      headersToInsert = new Header[size];
-      footersToInsert = new Footer[size];
-      headersToGet = new Header[size];
-
-      // Pre-create all data to avoid benchmarking String/Object allocation
+      keys = new byte[size][];
       for (int i = 0; i < size; i++) {
-        String keyStr = "key" + String.format("%07d", i);
-        headersToInsert[i] = createHeader(keyStr, i);
-        footersToInsert[i] = createFooter("val" + i);
-        headersToGet[i] = createHeader(keyStr, i);
+        byte[] key = ("key-" + String.format("%08d", i)).getBytes(StandardCharsets.UTF_8);
+        keys[i] = key;
+        MemorySegment keySegment = MemorySegment.ofArray(key);
+        byte[] val = ("value-" + i).getBytes(StandardCharsets.UTF_8);
+        MemorySegment valSegment = MemorySegment.ofArray(val);
+        Header header = new Header(key.length, keySegment, i, (byte) 0);
+        Footer footer = new Footer(val.length, valSegment);
+        skipList.insert(header, footer);
       }
-
-      // Pre-fill the skip list for the GET benchmarks
-      for (int i = 0; i < size; i++) {
-        skipList.insert(headersToInsert[i], footersToInsert[i]);
-      }
-
-      missingHeader = createHeader("ZZZZZZZ_missing", 999999);
-      index = 0;
     }
 
     @TearDown(Level.Trial)
     public void tearDown() {
-      arena.close();
-    }
-
-    public int nextInsertIndex() {
-      return index++ % size;
-    }
-
-    public Header nextHeader() {
-      return headersToGet[index++ % size];
+      hotArena.close();
     }
   }
 
-  // =========================================================================
-  //  JDK STATE (Baseline)
-  // =========================================================================
-
-  @State(Scope.Thread)
-  public static class JdkState {
+  @State(Scope.Benchmark)
+  public static class ConcurrentGetState {
     @Param({"1000", "10000", "100000"})
-    int size;
+    public int size;
 
-    TreeMap<String, String> treeMap;
-    ConcurrentSkipListMap<String, String> cslm;
-
-    String[] keys;
-    String missingKey = "ZZZZZZZ_missing";
-    int index;
+    public ConcurrentSkipListMap<String, String> map;
+    public String[] keys;
 
     @Setup(Level.Trial)
     public void setup() {
-      treeMap = new TreeMap<>();
-      cslm = new ConcurrentSkipListMap<>();
+      map = new ConcurrentSkipListMap<>();
       keys = new String[size];
-
       for (int i = 0; i < size; i++) {
-        keys[i] = "key" + String.format("%07d", i);
-        treeMap.put(keys[i], "val" + i);
-        cslm.put(keys[i], "val" + i);
+        String key = "key-" + String.format("%08d", i);
+        keys[i] = key;
+        map.put(key, "value-" + i);
       }
-      index = 0;
-    }
-
-    public String nextKey() {
-      return keys[index++ % size];
     }
   }
 
-  // =========================================================================
-  //  BENCHMARKS: INSERT
-  // =========================================================================
+  // ──────────────────────────────────────────────────────────
+  //  State for "insert" benchmarks (arena cleared between invocations)
+  // ──────────────────────────────────────────────────────────
+  @State(Scope.Thread)
+  public static class ArenaInsertState {
+    private static final int BATCH_SIZE = 5000;
+
+    public Arena hotArena;
+    public Arena coldArena;
+    public SkipList skipList;
+    public Header[] headers;
+    public Footer[] footers;
+
+    @Setup(Level.Invocation)
+    public void setup() {
+      hotArena = new Arena();
+      coldArena = new Arena();
+      skipList = new SkipList(hotArena, coldArena);
+      skipList.init();
+      headers = new Header[BATCH_SIZE];
+      footers = new Footer[BATCH_SIZE];
+      for (int i = 0; i < BATCH_SIZE; i++) {
+        byte[] key = ("key-" + String.format("%08d", i)).getBytes(StandardCharsets.UTF_8);
+        byte[] val = ("value-" + i).getBytes(StandardCharsets.UTF_8);
+        MemorySegment keySegment = MemorySegment.ofArray(key);
+        MemorySegment valSegment = MemorySegment.ofArray(val);
+        headers[i] = new Header(key.length, keySegment, i, (byte) 0);
+        footers[i] = new Footer(val.length, valSegment);
+      }
+    }
+
+    @TearDown(Level.Invocation)
+    public void tearDown() {
+      hotArena.close();
+    }
+  }
+
+  @State(Scope.Thread)
+  public static class ConcurrentInsertState {
+    private static final int BATCH_SIZE = 5000;
+
+    public ConcurrentSkipListMap<String, String> map;
+    public String[] keys;
+    public String[] values;
+
+    @Setup(Level.Invocation)
+    public void setup() {
+      map = new ConcurrentSkipListMap<>();
+      keys = new String[BATCH_SIZE];
+      values = new String[BATCH_SIZE];
+      for (int i = 0; i < BATCH_SIZE; i++) {
+        keys[i] = "key-" + String.format("%08d", i);
+        values[i] = "value-" + i;
+      }
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  Thread-local index state for get benchmarks
+  // ──────────────────────────────────────────────────────────
+  @State(Scope.Thread)
+  public static class IndexState {
+    public int index;
+
+    @Setup(Level.Invocation)
+    public void setup(ArenaGetState state) {
+      index = ThreadLocalRandom.current().nextInt(state.size);
+    }
+  }
+
+  @State(Scope.Thread)
+  public static class ConcurrentIndexState {
+    public int index;
+
+    @Setup(Level.Invocation)
+    public void setup(ConcurrentGetState state) {
+      index = ThreadLocalRandom.current().nextInt(state.size);
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  GET benchmarks – hit (key exists)
+  // ──────────────────────────────────────────────────────────
+  @Benchmark
+  public int get_arena(ArenaGetState state, IndexState idx) {
+    byte[] key = state.keys[idx.index];
+    MemorySegment keySegment = MemorySegment.ofArray(key);
+    Header header = new Header(key.length, keySegment, idx.index, (byte) 0);
+    return state.skipList.get(header);
+  }
 
   @Benchmark
-  public void insert_arena(ArenaState state) {
-    // Note: In a real test, you'd want to reset the arena
-    // but for thrpt we just keep inserting.
-    int idx = state.nextInsertIndex();
-    state.skipList.insert(state.headersToInsert[idx], state.footersToInsert[idx]);
+  public String get_concurrentSkipListMap(ConcurrentGetState state, ConcurrentIndexState idx) {
+    return state.map.get(state.keys[idx.index]);
+  }
+
+  // ──────────────────────────────────────────────────────────
+  //  GET benchmarks – miss (key does NOT exist)
+  // ──────────────────────────────────────────────────────────
+  @Benchmark
+  public int getMiss_arena(ArenaGetState state) {
+    byte[] key = "nonexistent-key-999999".getBytes(StandardCharsets.UTF_8);
+    MemorySegment keySegment = MemorySegment.ofArray(key);
+    Header header = new Header(key.length, keySegment, 0, (byte) 0);
+    return state.skipList.get(header);
   }
 
   @Benchmark
-  public void insert_treeMap(JdkState state) {
-    state.treeMap.put(state.nextKey(), "value");
+  public String getMiss_concurrentSkipListMap(ConcurrentGetState state) {
+    return state.map.get("nonexistent-key-999999");
   }
 
-  // =========================================================================
-  //  BENCHMARKS: GET
-  // =========================================================================
-
+  // ──────────────────────────────────────────────────────────
+  //  INSERT benchmarks – batch insert into fresh structure
+  // ──────────────────────────────────────────────────────────
   @Benchmark
-  public void get_arena(ArenaState state, Blackhole bh) {
-    bh.consume(state.skipList.get(state.nextHeader()));
-  }
-
-  @Benchmark
-  public void get_treeMap(JdkState state, Blackhole bh) {
-    bh.consume(state.treeMap.get(state.nextKey()));
+  @OperationsPerInvocation(5000)
+  public void insert_arena(ArenaInsertState state) {
+    for (int i = 0; i < ArenaInsertState.BATCH_SIZE; i++) {
+      state.skipList.insert(state.headers[i], state.footers[i]);
+    }
   }
 
   @Benchmark
-  public void get_concurrentSkipListMap(JdkState state, Blackhole bh) {
-    bh.consume(state.cslm.get(state.nextKey()));
+  @OperationsPerInvocation(5000)
+  public void insert_concurrentSkipListMap(ConcurrentInsertState state) {
+    for (int i = 0; i < ConcurrentInsertState.BATCH_SIZE; i++) {
+      state.map.put(state.keys[i], state.values[i]);
+    }
   }
 
-  // =========================================================================
-  //  BENCHMARKS: GET MISS
-  // =========================================================================
-
-  @Benchmark
-  public void getMiss_arena(ArenaState state, Blackhole bh) {
-    bh.consume(state.skipList.get(state.missingHeader));
-  }
-
-  @Benchmark
-  public void getMiss_treeMap(JdkState state, Blackhole bh) {
-    bh.consume(state.treeMap.get(state.missingKey));
-  }
-
-  // =========================================================================
-  //  BENCHMARKS: SCAN
-  // =========================================================================
-
-  @Benchmark
-  public void scan_arena(ArenaState state, Blackhole bh) {
-    state.skipList.forEach(bh::consume);
-  }
-
-  @Benchmark
-  public void scan_treeMap(JdkState state, Blackhole bh) {
-    state.treeMap.forEach((k, v) -> bh.consume(k));
-  }
-
-  // =========================================================================
-  //  HELPERS
-  // =========================================================================
-
-  private static Header createHeader(String key, long sn) {
-    byte[] keyBytes = key.getBytes(StandardCharsets.UTF_8);
-    return new Header(keyBytes.length, MemorySegment.ofArray(keyBytes), sn, (byte) 0);
-  }
-
-  private static Footer createFooter(String value) {
-    byte[] valBytes = value.getBytes(StandardCharsets.UTF_8);
-    return new Footer(valBytes.length, MemorySegment.ofArray(valBytes));
-  }
-
+  // ──────────────────────────────────────────────────────────
+  //  Main – convenience runner
+  // ──────────────────────────────────────────────────────────
   public static void main(String[] args) throws RunnerException {
-    Options opts = new OptionsBuilder()
+    Options opt = new OptionsBuilder()
         .include(SkipListBenchmark.class.getSimpleName())
         .build();
-    new Runner(opts).run();
+    new Runner(opt).run();
   }
 }
+

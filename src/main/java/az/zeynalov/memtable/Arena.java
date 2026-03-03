@@ -5,6 +5,8 @@ import az.zeynalov.memtable.exception.ErrorMessage;
 
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.invoke.VarHandle;
+import java.nio.ByteOrder;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -13,10 +15,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class Arena implements AutoCloseable {
 
   private final static long ALLOCATED_MEMORY_SIZE = 64L * (1 << 20);
-  private static final ValueLayout.OfInt UNALIGNED_INT =
-      ValueLayout.JAVA_INT.withByteAlignment(1);
-  private static final ValueLayout.OfLong UNALIGNED_LONG =
-      ValueLayout.JAVA_LONG.withByteAlignment(1);
+
+  private final static ValueLayout.OfLong BE_LONG = ValueLayout.JAVA_LONG.withOrder(
+      ByteOrder.BIG_ENDIAN);
+  private final static ValueLayout.OfInt BE_INT = ValueLayout.JAVA_INT.withOrder(
+      ByteOrder.BIG_ENDIAN);
+
   private final AtomicInteger availableOffset;
   private final java.lang.foreign.Arena offHeapScope;
 
@@ -29,12 +33,16 @@ public class Arena implements AutoCloseable {
   }
 
   public int allocate(int sizeOfPayload) {
-    int offset = availableOffset.get();
-    if (offset + sizeOfPayload > ALLOCATED_MEMORY_SIZE) {
+    int current = availableOffset.get();
+    int alignedOffset = (current + 7) & ~7;
+
+    int next = alignedOffset + sizeOfPayload;
+    if (next > ALLOCATED_MEMORY_SIZE) {
       throw ArenaCapacityException.of(ErrorMessage.ARENA_IS_FULL);
     }
-    availableOffset.set(offset + sizeOfPayload);
-    return offset;
+
+    availableOffset.set(next);
+    return alignedOffset;
   }
 
   public long readVarint(int offset) {
@@ -85,7 +93,7 @@ public class Arena implements AutoCloseable {
     return memory;
   }
 
-  public int getArenaSize(){
+  public int getArenaSize() {
     return availableOffset.get();
   }
 
@@ -94,14 +102,14 @@ public class Arena implements AutoCloseable {
   }
 
   public int readInt(int offset) {
-    return memory.get(UNALIGNED_INT, offset);
+    return memory.get(BE_INT, offset);
   }
 
-  public long readLong(int offset){
-    return memory.get(UNALIGNED_LONG, offset);
+  public long readLong(int offset) {
+    return memory.get(BE_LONG, offset);
   }
 
-  public byte readByte(int offset){
+  public byte readByte(int offset) {
     return memory.get(ValueLayout.JAVA_BYTE, offset);
   }
 
@@ -109,16 +117,16 @@ public class Arena implements AutoCloseable {
     MemorySegment.copy(payload, 0, this.memory, offset, payload.byteSize());
   }
 
-  public void writeByte(int offset, byte payload){
+  public void writeByte(int offset, byte payload) {
     memory.set(ValueLayout.JAVA_BYTE, offset, payload);
   }
 
-  public void writeLong(int offset, long payload){
-    memory.set(UNALIGNED_LONG, offset, payload);
+  public void writeLong(int offset, long payload) {
+    memory.set(BE_LONG, offset, payload);
   }
 
   public void writeInt(int offset, int payload) {
-    memory.set(UNALIGNED_INT, offset, payload);
+    memory.set(BE_INT, offset, payload);
   }
 
   @Override

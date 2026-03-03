@@ -168,3 +168,5 @@ SkipListBenchmark.scan_arena                 100000   avgt    5  187.295 ±  15.
 SkipListBenchmark.scan_treeMap                 1000   avgt    5    3.715 ±   0.216   us/op
 SkipListBenchmark.scan_treeMap                10000   avgt    5   87.590 ±  15.738   us/op
 SkipListBenchmark.scan_treeMap               100000   avgt    5  596.692 ± 100.679   us/op
+
+
