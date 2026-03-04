@@ -125,15 +125,12 @@ public class SkipList {
 
   /**
    * This method compares the key and SN of the node at the given offset with the target key and SN.
-   * It reads the key size, key, and SN from the node and compares them with the target key and SN.
-   * The method returns: - a negative integer if the node is less than the target (node key < target
-   * key or node key == target key and node SN < target SN) - zero if the node is equal to the
-   * target (node key == target key and node SN == target SN) - a positive integer if the node is
-   * greater than the target (node key > target key or node key == target key and node SN > target
-   * SN) The comparison is done first by key and then by SN if the keys are equal. The method uses
-   * MemorySegment.mismatch to find the first byte where the node key and target key differ, which
-   * allows for efficient comparison without needing to read the entire key if they differ early
-   * on.
+   * To make it efficient, it first compares the prefix (the first 8 bytes of the key) and if they
+   * are equal, it then compares the full keys and SNs. The method returns: - a negative integer if the node
+   * is less than the target (node key < target key or node key == target key and node SN < target SN) - zero
+   * if the node is equal to the target (node key == target key and node SN == target SN) - a positive
+   * integer if the node is greater than the target (node key > target key or node key == target key
+   * and node SN > target SN) The comparison is done first by key and then by SN if the keys are equal.
    */
   private int compare(int nodeOffset, long targetPrefix, long targetSN,
       MemorySegment targetKey) {
@@ -219,15 +216,12 @@ public class SkipList {
 
 
   /**
-   * This method creates a new node in the arena with the given header and footer information. It
-   * calculates the total size needed for the node, allocates the memory in the arena and writes the
-   * node's metadata (number of levels, next node pointers) and the record's header and footer
-   * information into the allocated memory.
-   * <p>
-   * Code is split into three parts: writing node metadata, writing header and writing footer. We
-   * can split the code into three methods if we want to make it more readable, but it will be less
-   * efficient, because we will have to calculate offsets multiple times and write to the arena
-   * multiple times.
+   * This method creates a new node in the skip list with the given number of levels and the record
+   * defined by the header and footer. It first calculates the sizes of the cold and hot data, then it
+   * allocates space in the respective arenas and writes the data. The cold data includes the SN, type,
+   * key size, value size, key bytes, and value bytes, while the hot data includes the prefix, level count,
+   * offset to the cold data, and the next node pointers. Finally, it returns the offset of the newly
+   * created node in the hot arena.
    */
 
   private int createNodeWithRecord(int numberOfLevels, Header header, Footer footer) {
@@ -305,6 +299,11 @@ public class SkipList {
     return hotArena.readInt(nextNodeOffset);
   }
 
+  /**
+   * This method writes the offset of the next node at a specific level for a given node. It calculates
+   * the correct position in the hot arena based on the node's offset and the level index, and then
+   * writes the new offset value.
+   */
   private void writeNext(int nodeOffset, int level, int value) {
     hotArena.writeInt(nodeOffset + HOT_PATH_METADATA + (POINTER_SIZE * level), value);
   }

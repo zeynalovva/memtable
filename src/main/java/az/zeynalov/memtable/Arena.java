@@ -5,7 +5,6 @@ import az.zeynalov.memtable.exception.ErrorMessage;
 
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
 import java.util.concurrent.atomic.AtomicInteger;
 

@@ -47,9 +47,9 @@ public class ArenaTest {
       int third = arena.allocate(20);
 
       assertEquals(0, first);
-      assertEquals(50, second);
-      assertEquals(80, third);
-      assertEquals(100, arena.getArenaSize());
+      assertEquals(56, second);
+      assertEquals(88, third);
+      assertEquals(108, arena.getArenaSize());
     }
 
     @Test

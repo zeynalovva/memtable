@@ -170,3 +170,47 @@ SkipListBenchmark.scan_treeMap                10000   avgt    5   87.590 ±  15.
 SkipListBenchmark.scan_treeMap               100000   avgt    5  596.692 ± 100.679   us/op
 
 
+# Third
+
+SkipListBenchmark.getHit_arena     1000  thrpt    7    5.317 ±  0.059  ops/us
+SkipListBenchmark.getHit_arena    10000  thrpt    7    3.322 ±  0.130  ops/us
+SkipListBenchmark.getHit_arena   100000  thrpt    7    1.920 ±  0.036  ops/us
+SkipListBenchmark.getHit_cslm      1000  thrpt    7   17.806 ±  0.359  ops/us
+SkipListBenchmark.getHit_cslm     10000  thrpt    7    6.928 ±  0.408  ops/us
+SkipListBenchmark.getHit_cslm    100000  thrpt    7    3.829 ±  0.244  ops/us
+SkipListBenchmark.getMiss_arena    1000  thrpt    7    7.302 ±  0.038  ops/us
+SkipListBenchmark.getMiss_arena   10000  thrpt    7   14.807 ±  0.011  ops/us
+SkipListBenchmark.getMiss_arena  100000  thrpt    7   28.340 ±  0.130  ops/us
+SkipListBenchmark.getMiss_cslm     1000  thrpt    7   28.387 ±  0.319  ops/us
+SkipListBenchmark.getMiss_cslm    10000  thrpt    7   24.470 ±  0.123  ops/us
+SkipListBenchmark.getMiss_cslm   100000  thrpt    7   15.756 ±  0.121  ops/us
+SkipListBenchmark.insert_arena      N/A  thrpt    7    9.732 ±  0.241  ops/us
+SkipListBenchmark.insert_cslm       N/A  thrpt    7   10.348 ±  0.059  ops/us
+SkipListBenchmark.mixed_cslm      10000  thrpt    7    7.043 ±  0.308  ops/us
+SkipListBenchmark.scan_arena       1000  thrpt    7    0.505 ±  0.002  ops/us
+SkipListBenchmark.scan_arena      10000  thrpt    7    0.051 ±  0.001  ops/us
+SkipListBenchmark.scan_arena     100000  thrpt    7    0.005 ±  0.001  ops/us
+SkipListBenchmark.scan_cslm        1000  thrpt    7    0.711 ±  0.003  ops/us
+SkipListBenchmark.scan_cslm       10000  thrpt    7    0.056 ±  0.002  ops/us
+SkipListBenchmark.scan_cslm      100000  thrpt    7    0.005 ±  0.001  ops/us
+SkipListBenchmark.getHit_arena     1000   avgt    7    0.189 ±  0.002   us/op
+SkipListBenchmark.getHit_arena    10000   avgt    7    0.263 ±  0.008   us/op
+SkipListBenchmark.getHit_arena   100000   avgt    7    0.552 ±  0.015   us/op
+SkipListBenchmark.getHit_cslm      1000   avgt    7    0.056 ±  0.015   us/op
+SkipListBenchmark.getHit_cslm     10000   avgt    7    0.150 ±  0.012   us/op
+SkipListBenchmark.getHit_cslm    100000   avgt    7    0.266 ±  0.017   us/op
+SkipListBenchmark.getMiss_arena    1000   avgt    7    0.063 ±  0.001   us/op
+SkipListBenchmark.getMiss_arena   10000   avgt    7    0.031 ±  0.001   us/op
+SkipListBenchmark.getMiss_arena  100000   avgt    7    0.143 ±  0.001   us/op
+SkipListBenchmark.getMiss_cslm     1000   avgt    7    0.021 ±  0.001   us/op
+SkipListBenchmark.getMiss_cslm    10000   avgt    7    0.055 ±  0.001   us/op
+SkipListBenchmark.getMiss_cslm   100000   avgt    7    0.067 ±  0.001   us/op
+SkipListBenchmark.insert_arena      N/A   avgt    7    0.115 ±  0.088   us/op
+SkipListBenchmark.insert_cslm       N/A   avgt    7    0.096 ±  0.003   us/op
+SkipListBenchmark.mixed_cslm      10000   avgt    7    0.154 ±  0.009   us/op
+SkipListBenchmark.scan_arena       1000   avgt    7    2.676 ±  0.736   us/op
+SkipListBenchmark.scan_arena      10000   avgt    7   25.980 ±  2.013   us/op
+SkipListBenchmark.scan_arena     100000   avgt    7  266.931 ± 22.883   us/op
+SkipListBenchmark.scan_cslm        1000   avgt    7    1.286 ±  0.379   us/op
+SkipListBenchmark.scan_cslm       10000   avgt    7   18.427 ±  1.740   us/op
+SkipListBenchmark.scan_cslm      100000   avgt    7  223.770 ± 57.201   us/op

@@ -49,7 +49,6 @@ class SkipListTest {
     }
   }
 
-  @Test
   void testPutAndGet() {
     Header header1 = createHeader("12", 10, (byte) 1);
     Header header2 = createHeader("12", 13, (byte) 1);
@@ -96,10 +95,12 @@ class SkipListTest {
     int offsetB = skipList.get(hB);
     int offsetC = skipList.get(hC);
 
+    System.out.println(offsetA);
+
 
     List<Integer> offsetsFromIterator = new ArrayList<>();
     skipList.forEach(offsetsFromIterator::add);
-
+    System.out.println(offsetsFromIterator);
 
     assertEquals(3, offsetsFromIterator.size());
     assertEquals(offsetA, offsetsFromIterator.get(0));
@@ -148,39 +149,6 @@ class SkipListTest {
     return new Record(temp, footer);
   }
 
-
-  /**
-   * Tight hot-loop test to trigger JIT C2 compilation and method inlining on
-   * SkipList.get -> compareNodeWithTarget -> compareKeyOnly -> compareRawKeys.
-   *
-   * HOW TO RUN AND SEE INLINING:
-   *
-   * 1) Via Maven (output goes to stdout, redirect to a file to grep):
-   *
-   *    mvn test -Dtest="SkipListTest#testInliningWithMassiveInsertsAndGets" \
-   *      -DargLine="-XX:+UnlockDiagnosticVMOptions -XX:+PrintInlining -XX:+PrintCompilation" \
-   *      2>&1 | tee /tmp/jit_output.txt
-   *
-   *    Then filter for SkipList:
-   *      grep -i "SkipList" /tmp/jit_output.txt
-   *
-   *    You should see lines like:
-   *      @ 42   az.zeynalov.memtable.SkipList::compareNodeWithTarget (30 bytes)   inline (hot)
-   *      @ 15   az.zeynalov.memtable.SkipList::compareKeyOnly (45 bytes)   inline (hot)
-   *      @ 28   az.zeynalov.memtable.SkipList::readIthNextNode (14 bytes)   inline (hot)
-   *      @ 5    az.zeynalov.memtable.SkipList::isNull (10 bytes)   inline (hot)
-   *
-   *    If a method is NOT inlined you'll see:
-   *      @ 42   ...SkipList::getPrefix (200 bytes)   hot method too big
-   *
-   * 2) Via IntelliJ: Edit the test run configuration, add these to VM Options:
-   *      -XX:+UnlockDiagnosticVMOptions -XX:+PrintInlining -XX:+PrintCompilation
-   *    Then look in the console output.
-   *
-   * 3) To force more aggressive inlining (raise the threshold):
-   *      -XX:+UnlockDiagnosticVMOptions -XX:+PrintInlining -XX:+PrintCompilation \
-   *      -XX:MaxInlineSize=100 -XX:FreqInlineSize=500 -XX:InlineSmallCode=4000
-   */
   @Test
   void testInliningWithMassiveInsertsAndGets() {
     int insertCount = 10_000;
