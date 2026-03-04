@@ -73,8 +73,13 @@ public class SkipList {
   }
 
   /**
-   * Layout of node: prefix (8 bytes) + SN (8 bytes) + key size (4 bytes) + value size (4 bytes) +
-   * level count (4 bytes) + next node pointers (4 bytes each) + key bytes + value bytes
+   * Layout of the node in hot arena: [prefix (8 bytes)][level count (4 bytes)][offset to cold data (4 bytes)][next pointers...]
+   * Layout of the node in cold arena: [SN (8 bytes)][type (4 bytes)][key size (4 bytes)][value size (4 bytes)][key bytes][value bytes]
+   * The insert method first finds the correct position for the new node by traversing the skip
+   * list levels, then it creates a new node with the given header and footer, and finally it
+   * updates the next pointers of the new node and the existing nodes to maintain the skip list
+   * structure. The method uses the updateCache to store the offsets of the nodes that need to be
+   * updated at each level, which helps to efficiently update the pointers after inserting the new node.
    */
   public void insert(Header header, Footer footer) {
     int[] update = updateCache.get();
