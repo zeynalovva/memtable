@@ -32,15 +32,17 @@ public class Arena implements AutoCloseable {
   }
 
   public int allocate(int sizeOfPayload) {
-    int current = availableOffset.get();
-    int alignedOffset = (current + 7) & ~7;
+    int current, alignedOffset, next;
+    do {
+      current = availableOffset.get();
+      alignedOffset = (current + 7) & ~7;
+      next = alignedOffset + sizeOfPayload;
 
-    int next = alignedOffset + sizeOfPayload;
-    if (next > ALLOCATED_MEMORY_SIZE) {
-      throw ArenaCapacityException.of(ErrorMessage.ARENA_IS_FULL);
-    }
+      if (next > ALLOCATED_MEMORY_SIZE) {
+        throw ArenaCapacityException.of(ErrorMessage.ARENA_IS_FULL);
+      }
+    } while (!availableOffset.compareAndSet(current, next));
 
-    availableOffset.set(next);
     return alignedOffset;
   }
 
