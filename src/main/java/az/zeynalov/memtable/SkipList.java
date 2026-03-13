@@ -167,6 +167,18 @@ public class SkipList {
     int keyLength = coldArena.readInt(offset + KEY_LENGTH_OFFSET);
     int keyOffset = offset + KEY_LENGTH_OFFSET + KEY_LENGTH + VALUE_LENGTH;
 
+    if(keyLength < 32){
+      for (int i = 0; i < keyLength; i++) {
+        byte b1 = coldArena.readByte(keyOffset + i);
+        byte b2 = targetKey.get(ValueLayout.JAVA_BYTE, i);
+        int cmp = Byte.compareUnsigned(b1, b2);
+        if (cmp != 0) {
+          return cmp;
+        }
+      }
+      return 0;
+    }
+
     long mismatch = MemorySegment.mismatch(
         coldArena.getMemory(), keyOffset, keyOffset + keyLength,
         targetKey, 0, targetKey.byteSize()
