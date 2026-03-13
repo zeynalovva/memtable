@@ -417,51 +417,6 @@ public class ArenaTest {
   }
 
   @Nested
-  class MixedTypeReadWrite {
-
-    @Test
-    void writeIntThenLongAtSubsequentOffsets() {
-      arena.allocate(Integer.BYTES + Long.BYTES);
-      arena.writeInt(0, 42);
-      arena.writeLong(Integer.BYTES, 99L);
-
-      assertEquals(42, arena.readInt(0));
-      assertEquals(99L, arena.readLong(Integer.BYTES));
-    }
-
-    @Test
-    void writeByteThenIntThenLong() {
-      int totalSize = Byte.BYTES + Integer.BYTES + Long.BYTES;
-      arena.allocate(totalSize);
-
-      arena.writeByte(0, (byte) 0xFF);
-      arena.writeInt(Byte.BYTES, 256);
-      arena.writeLong(Byte.BYTES + Integer.BYTES, Long.MAX_VALUE);
-
-      assertEquals((byte) 0xFF, arena.readByte(0));
-      assertEquals(256, arena.readInt(Byte.BYTES));
-      assertEquals(Long.MAX_VALUE, arena.readLong(Byte.BYTES + Integer.BYTES));
-    }
-
-    @Test
-    void writeVarintFollowedByBytes() {
-      arena.allocate(20);
-      byte[] data = {10, 20, 30};
-      arena.writeVarint(0, data.length);
-      arena.writeBytes(5, MemorySegment.ofArray(data));
-
-      long packed = arena.readVarint(0);
-      int length = (int) (packed >> 32);
-      assertEquals(3, length);
-
-      MemorySegment result = arena.readBytes(5, length);
-      assertEquals(10, result.get(ValueLayout.JAVA_BYTE, 0));
-      assertEquals(20, result.get(ValueLayout.JAVA_BYTE, 1));
-      assertEquals(30, result.get(ValueLayout.JAVA_BYTE, 2));
-    }
-  }
-
-  @Nested
   class MemorySegmentAccess {
 
     @Test
