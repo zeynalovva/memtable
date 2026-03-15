@@ -2,8 +2,12 @@ package az.zeynalov.memtable;
 
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
+import java.nio.ByteOrder;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Consumer;
+
 
 public class SkipList {
 
@@ -21,6 +25,8 @@ public class SkipList {
   private final static int KEY_LENGTH_OFFSET = SN_LENGTH + TYPE_LENGTH;
   private final static int HOT_PATH_METADATA = PREFIX_LENGTH + LEVEL_COUNT_LENGTH + POINTER_SIZE;
 
+  private static final VarHandle LEVEL_HANDLE;
+  private static final VarHandle UPDATE_CACHE_HANDLE = ValueLayout.JAVA_INT.withOrder(ByteOrder.BIG_ENDIAN).varHandle();
 
   private final ThreadLocal<int[]> updateCache = ThreadLocal.withInitial(
       () -> new int[MAX_LEVEL + 1]);
@@ -30,7 +36,15 @@ public class SkipList {
   private int head;
   private int currenLevel;
 
-  // TODO
+  static{
+    try{
+      LEVEL_HANDLE = MethodHandles.lookup().findVarHandle(SkipList.class, "currenLevel", int.class);
+    }
+    catch (ReflectiveOperationException e){
+      throw new Error(e);
+    }
+  }
+
   // TODO make code clean
   // TODO assure concurrency
   public SkipList(Arena hotArena, Arena coldArena) {
@@ -56,7 +70,7 @@ public class SkipList {
     int currentPosition = head;
     long targetPrefix = getPrefix(header.key());
 
-    for (int i = currenLevel; i >= 0; i--) {
+    for (int i = (int) LEVEL_HANDLE.get(this); i >= 0; i--) {
       while (true) {
         int next = readNext(i, currentPosition);
         if (isNull(next) || compare(next, targetPrefix, header.SN(), header.key()) <= 0) {
@@ -66,10 +80,17 @@ public class SkipList {
       }
     }
 
-    currentPosition = readNext(0, currentPosition);
-    return (currentPosition != -1
-        && compare(currentPosition, targetPrefix, header.SN(), header.key()) == 0) ? currentPosition
-        : -1;
+    int candidate = readNext(0, currentPosition);
+    if (isNull(candidate)) {
+      return -1;
+    }
+
+    if (compare(candidate, targetPrefix, header.SN(), header.key()) <= 0
+        && compareKeyOnly(candidate, targetPrefix, header.key()) == 0) {
+      return candidate;
+    }
+
+    return -1;
   }
 
   /**
@@ -86,7 +107,7 @@ public class SkipList {
     int currentPosition = head;
     long targetPrefix = getPrefix(header.key());
 
-    for (int i = currenLevel; i >= 0; i--) {
+    for (int i = (int) LEVEL_HANDLE.get(this); i >= 0; i--) {
       while (true) {
         int next = readNext(i, currentPosition);
         if (isNull(next) || compare(next, targetPrefix, header.SN(), header.key()) <= 0) {
@@ -99,20 +120,51 @@ public class SkipList {
     }
 
     int newLevel = randomLevel();
-    if (newLevel > currenLevel) {
-      for (int i = currenLevel + 1; i <= newLevel; i++) {
+    int oldLevel = (int) LEVEL_HANDLE.get(this);
+    if (newLevel > oldLevel) {
+      for (int i = oldLevel + 1; i <= newLevel; i++) {
         update[i] = head;
       }
-      currenLevel = newLevel;
+
+      int witness;
+      while ((witness = (int) LEVEL_HANDLE.get(this)) < newLevel) {
+        if ((boolean) LEVEL_HANDLE.compareAndSet(this, witness, newLevel)) {
+          break;
+        }
+      }
     }
 
     int newNode = createNodeWithRecord(newLevel + 1, header, footer);
 
-    // Interchange update and new node pointers
+    // Link new node into each level bottom-up using CAS.
+    // 1. Set newNode's forward pointer to what we expect predecessor's next to be.
+    // 2. CAS predecessor's next from that expected value to newNode.
+    // 3. If CAS fails, re-traverse from update[i] at level i to find the
+    //    correct predecessor (the node whose key is still < our key),
+    //    then retry. This handles the case where another thread inserted
+    //    a node between update[i] and the old next.
     for (int i = 0; i <= newLevel; i++) {
-      int nextOfUpdate = readNext(i, update[i]);
-      writeNext(newNode, i, nextOfUpdate);
-      writeNext(update[i], i, newNode);
+      while (true) {
+        int expected = readNext(i, update[i]);
+
+        if (!isNull(expected) && compare(expected, targetPrefix, header.SN(), header.key()) > 0) {
+          int cur = update[i];
+          while (true) {
+            int next = readNext(i, cur);
+            if (isNull(next) || compare(next, targetPrefix, header.SN(), header.key()) <= 0) {
+              break;
+            }
+            cur = next;
+          }
+          update[i] = cur;
+          continue;
+        }
+
+        writeNext(newNode, i, expected);
+        if (casNext(update[i], i, expected, newNode)) {
+          break;
+        }
+      }
     }
   }
 
@@ -167,8 +219,12 @@ public class SkipList {
     int keyLength = coldArena.readInt(offset + KEY_LENGTH_OFFSET);
     int keyOffset = offset + KEY_LENGTH_OFFSET + KEY_LENGTH + VALUE_LENGTH;
 
-    if(keyLength < 32){
-      for (int i = 0; i < keyLength; i++) {
+    if (keyLength < 32) {
+      long targetLenLong = targetKey.byteSize();
+      int targetLen = targetLenLong > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) targetLenLong;
+      int minLen = Math.min(keyLength, targetLen);
+
+      for (int i = 0; i < minLen; i++) {
         byte b1 = coldArena.readByte(keyOffset + i);
         byte b2 = targetKey.get(ValueLayout.JAVA_BYTE, i);
         int cmp = Byte.compareUnsigned(b1, b2);
@@ -176,7 +232,8 @@ public class SkipList {
           return cmp;
         }
       }
-      return 0;
+
+      return Integer.compare(keyLength, targetLen);
     }
 
     long mismatch = MemorySegment.mismatch(
@@ -309,11 +366,11 @@ public class SkipList {
 
   /**
    * Instead of just jumping to the offset of the next node, this method reads the offset of the
-   * next node at a specific level and returns it.
+   * next node at a specific level and returns it. Uses acquire semantics to see writes from other threads.
    */
   private int readNext(int index, int offset) {
     int nextNodeOffset = offset + HOT_PATH_METADATA + (POINTER_SIZE * index);
-    return hotArena.readInt(nextNodeOffset);
+    return (int) UPDATE_CACHE_HANDLE.getAcquire(hotArena.getMemory(), (long) nextNodeOffset);
   }
 
   /**
@@ -322,7 +379,17 @@ public class SkipList {
    * writes the new offset value.
    */
   private void writeNext(int nodeOffset, int level, int value) {
-    hotArena.writeInt(nodeOffset + HOT_PATH_METADATA + (POINTER_SIZE * level), value);
+    int nextNodeOffset = nodeOffset + HOT_PATH_METADATA + (POINTER_SIZE * level);
+    UPDATE_CACHE_HANDLE.setRelease(hotArena.getMemory(), (long) nextNodeOffset, value);
+  }
+
+  /**
+   * Atomically compare-and-swap the next pointer at a given level for a node.
+   * Returns true if the CAS succeeded.
+   */
+  private boolean casNext(int nodeOffset, int level, int expectedValue, int newValue) {
+    int nextNodeOffset = nodeOffset + HOT_PATH_METADATA + (POINTER_SIZE * level);
+    return UPDATE_CACHE_HANDLE.compareAndSet(hotArena.getMemory(), (long) nextNodeOffset, expectedValue, newValue);
   }
 
   /**
