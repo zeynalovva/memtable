@@ -8,7 +8,7 @@ import java.nio.ByteOrder;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Consumer;
 
-
+// TODO change byte reading order to native order for better performance
 public class SkipList {
 
   private final static float PROBABILITY = 0.25F;
@@ -17,8 +17,8 @@ public class SkipList {
   private final static int PREFIX_LENGTH = 8;
   private final static int SN_LENGTH = 8;
   private final static int TYPE_LENGTH = 4;
-  private final static int KEY_LENGTH = 4;
-  private final static int VALUE_LENGTH = 4;
+  public final static int KEY_LENGTH = 4;
+  public final static int VALUE_LENGTH = 4;
   private final static int LEVEL_COUNT_LENGTH = 4;
   private final static int POINTER_SIZE = 4;
 
@@ -26,7 +26,6 @@ public class SkipList {
   private final static int HOT_PATH_METADATA = PREFIX_LENGTH + LEVEL_COUNT_LENGTH + POINTER_SIZE;
 
   public final static int COLD_ARENA_POINTER_OFFSET = PREFIX_LENGTH + LEVEL_COUNT_LENGTH;
-  public final static int KEY_OFFSET = SN_LENGTH + TYPE_LENGTH + KEY_LENGTH + VALUE_LENGTH;
   public final static int KEY_SIZE_OFFSET = SN_LENGTH + TYPE_LENGTH;
   public final static int VALUE_SIZE_OFFSET = SN_LENGTH + TYPE_LENGTH + KEY_LENGTH;
 
@@ -210,9 +209,7 @@ public class SkipList {
 
   public int compareKeyOnly(int nodeOffset, long targetPrefix, MemorySegment targetKey) {
     long sourcePrefix = hotArena.readLong(nodeOffset);
-    if (sourcePrefix == -1 || targetPrefix == -1) {
-      return compareRawKeys(nodeOffset, targetKey);
-    }
+
     int comparison = Long.compareUnsigned(sourcePrefix, targetPrefix);
     if (comparison != 0) {
       return comparison;
@@ -278,7 +275,13 @@ public class SkipList {
     if (size >= 8) {
       return key.get(ValueLayout.JAVA_LONG_UNALIGNED.withOrder(ByteOrder.BIG_ENDIAN), 0);
     }
-    return -1;
+
+    long prefix = 0;
+    for (int i = 0; i < size; i++) {
+      long b = Byte.toUnsignedLong(key.get(ValueLayout.JAVA_BYTE, i));
+      prefix |= (b << (56 - (i * 8)));
+    }
+    return prefix;
   }
 
 
