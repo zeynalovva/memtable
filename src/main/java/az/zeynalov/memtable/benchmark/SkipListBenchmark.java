@@ -1,8 +1,6 @@
 package az.zeynalov.memtable.benchmark;
 
 import az.zeynalov.memtable.Arena;
-import az.zeynalov.memtable.Footer;
-import az.zeynalov.memtable.Header;
 import az.zeynalov.memtable.SkipList;
 
 import java.lang.foreign.MemorySegment;
@@ -67,12 +65,15 @@ public class SkipListBenchmark {
     public Arena coldArena;
     public SkipList skipList;
 
-    // Pre-built hit headers — zero allocation inside @Benchmark
-    public Header[] hitHeaders;
-    // Pre-built miss header — key is guaranteed absent
-    public Header missHeader;
-    // Pre-built scan-start header — key at the 25th percentile
-    public Header scanStartHeader;
+    // Pre-built hit keys and SNs — zero allocation inside @Benchmark
+    public MemorySegment[] hitKeys;
+    public long[] hitSNs;
+    // Pre-built miss key/SN — key is guaranteed absent
+    public MemorySegment missKey;
+    public long missSN;
+    // Pre-built scan-start key/SN — key at the 25th percentile
+    public MemorySegment scanStartKey;
+    public long scanStartSN;
 
     @Setup(Level.Trial)
     public void setup() {
@@ -81,7 +82,8 @@ public class SkipListBenchmark {
       skipList  = new SkipList(hotArena, coldArena);
       skipList.init();
 
-      hitHeaders = new Header[size];
+      hitKeys = new MemorySegment[size];
+      hitSNs  = new long[size];
 
       for (int i = 0; i < size; i++) {
         byte[] key = makeKey(i);
@@ -89,30 +91,19 @@ public class SkipListBenchmark {
         MemorySegment keySeg = MemorySegment.ofArray(key);
         MemorySegment valSeg = MemorySegment.ofArray(val);
         // SN = Long.MAX_VALUE → always returns the latest version (MVCC hit)
-        Header h = new Header(key.length, keySeg, Long.MAX_VALUE, (byte) 0);
-        Footer f = new Footer(val.length, valSeg);
-        skipList.insert(h, f);
+        skipList.insert(keySeg, Long.MAX_VALUE, (byte) 0, valSeg);
         // Re-use same MemorySegment for lookup — it's read-only, safe
-        hitHeaders[i] = new Header(key.length, keySeg, Long.MAX_VALUE, (byte) 0);
+        hitKeys[i] = keySeg;
+        hitSNs[i]  = Long.MAX_VALUE;
       }
 
       // Miss key: lexicographically outside the inserted range
-      byte[] missKey = "key-9999999999".getBytes(StandardCharsets.UTF_8);
-      missHeader = new Header(
-          missKey.length,
-          MemorySegment.ofArray(missKey),
-          Long.MAX_VALUE,
-          (byte) 0
-      );
+      missKey = MemorySegment.ofArray("key-9999999999".getBytes(StandardCharsets.UTF_8));
+      missSN  = Long.MAX_VALUE;
 
       // Scan start: 25th percentile key
-      byte[] scanKey = makeKey(size / 4);
-      scanStartHeader = new Header(
-          scanKey.length,
-          MemorySegment.ofArray(scanKey),
-          Long.MAX_VALUE,
-          (byte) 0
-      );
+      scanStartKey = MemorySegment.ofArray(makeKey(size / 4));
+      scanStartSN  = Long.MAX_VALUE;
     }
 
     @TearDown(Level.Trial)
@@ -164,8 +155,10 @@ public class SkipListBenchmark {
     public Arena    hotArena;
     public Arena    coldArena;
     public SkipList skipList;
-    public Header[] headers;
-    public Footer[] footers;
+    public MemorySegment[] keys;
+    public long[]   sns;
+    public byte[]   types;
+    public MemorySegment[] values;
 
     @Setup(Level.Invocation)
     public void setup() {
@@ -173,15 +166,17 @@ public class SkipListBenchmark {
       coldArena = new Arena();
       skipList  = new SkipList(hotArena, coldArena);
       skipList.init();
-      headers = new Header[BATCH];
-      footers = new Footer[BATCH];
+      keys   = new MemorySegment[BATCH];
+      sns    = new long[BATCH];
+      types  = new byte[BATCH];
+      values = new MemorySegment[BATCH];
       for (int i = 0; i < BATCH; i++) {
         byte[] key = makeKey(i);
         byte[] val = makeValue(i);
-        // MemorySegment.ofArray is fine here — it is part of insert work,
-        // symmetric with CSLM which also receives the byte[] directly.
-        headers[i] = new Header(key.length, MemorySegment.ofArray(key), i, (byte) 0);
-        footers[i] = new Footer(val.length, MemorySegment.ofArray(val));
+        keys[i]   = MemorySegment.ofArray(key);
+        sns[i]    = i;
+        types[i]  = (byte) 0;
+        values[i] = MemorySegment.ofArray(val);
       }
     }
 
@@ -281,7 +276,8 @@ public class SkipListBenchmark {
 
   @Benchmark
   public int getHit_arena(ArenaGetState s, RandomIndex idx) {
-    return s.skipList.get(s.hitHeaders[idx.next()]);
+    int i = idx.next();
+    return s.skipList.get(s.hitKeys[i], s.hitSNs[i]);
   }
 
   @Benchmark
@@ -297,7 +293,7 @@ public class SkipListBenchmark {
 
   @Benchmark
   public int getMiss_arena(ArenaGetState s) {
-    return s.skipList.get(s.missHeader);
+    return s.skipList.get(s.missKey, s.missSN);
   }
 
   @Benchmark
@@ -352,7 +348,7 @@ public class SkipListBenchmark {
   @OperationsPerInvocation(ArenaInsertState.BATCH)
   public void insert_arena(ArenaInsertState s) {
     for (int i = 0; i < ArenaInsertState.BATCH; i++) {
-      s.skipList.insert(s.headers[i], s.footers[i]);
+      s.skipList.insert(s.keys[i], s.sns[i], s.types[i], s.values[i]);
     }
   }
 
@@ -382,9 +378,12 @@ public class SkipListBenchmark {
     public Arena    hotArena;
     public Arena    coldArena;
     public SkipList skipList;
-    public Header[] hitHeaders;
-    public Header[] insertHeaders;
-    public Footer[] insertFooters;
+    public MemorySegment[] hitKeys;
+    public long[]   hitSNs;
+    public MemorySegment[] insertKeys;
+    public long[]   insertSNs;
+    public byte[]   insertTypes;
+    public MemorySegment[] insertValues;
     public AtomicInteger insertCounter = new AtomicInteger(0);
 
     @Setup(Level.Trial)
@@ -393,22 +392,25 @@ public class SkipListBenchmark {
       coldArena = new Arena();
       skipList  = new SkipList(hotArena, coldArena);
       skipList.init();
-      hitHeaders    = new Header[size];
-      insertHeaders = new Header[size];
-      insertFooters = new Footer[size];
+      hitKeys      = new MemorySegment[size];
+      hitSNs       = new long[size];
+      insertKeys   = new MemorySegment[size];
+      insertSNs    = new long[size];
+      insertTypes  = new byte[size];
+      insertValues = new MemorySegment[size];
 
       for (int i = 0; i < size; i++) {
         byte[] key = makeKey(i);
         byte[] val = makeValue(i);
         MemorySegment keySeg = MemorySegment.ofArray(key);
         MemorySegment valSeg = MemorySegment.ofArray(val);
-        skipList.insert(
-            new Header(key.length, keySeg, i, (byte) 0),
-            new Footer(val.length, valSeg)
-        );
-        hitHeaders[i]    = new Header(key.length, keySeg, Long.MAX_VALUE, (byte) 0);
-        insertHeaders[i] = new Header(key.length, keySeg, size + i, (byte) 0);
-        insertFooters[i] = new Footer(val.length, valSeg);
+        skipList.insert(keySeg, i, (byte) 0, valSeg);
+        hitKeys[i]      = keySeg;
+        hitSNs[i]       = Long.MAX_VALUE;
+        insertKeys[i]   = keySeg;
+        insertSNs[i]    = size + i;
+        insertTypes[i]  = (byte) 0;
+        insertValues[i] = valSeg;
       }
     }
 
@@ -454,11 +456,12 @@ public class SkipListBenchmark {
     // 80/20 split based on index position in the shuffled array
     if ((i & 0x7) != 0) {
       // 87.5% reads (7 out of 8)
-      return s.skipList.get(s.hitHeaders[i % s.size]);
+      int idx2 = i % s.size;
+      return s.skipList.get(s.hitKeys[idx2], s.hitSNs[idx2]);
     } else {
-      // 12.5% writes — cycles through insert headers
+      // 12.5% writes — cycles through insert keys
       int wi = s.insertCounter.getAndIncrement() % s.size;
-      s.skipList.insert(s.insertHeaders[wi], s.insertFooters[wi]);
+      s.skipList.insert(s.insertKeys[wi], s.insertSNs[wi], s.insertTypes[wi], s.insertValues[wi]);
       return wi;
     }
   }

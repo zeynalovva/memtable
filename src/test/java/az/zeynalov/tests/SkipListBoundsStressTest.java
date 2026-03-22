@@ -1,8 +1,6 @@
 package az.zeynalov.tests;
 
 import az.zeynalov.memtable.Arena;
-import az.zeynalov.memtable.Footer;
-import az.zeynalov.memtable.Header;
 import az.zeynalov.memtable.SkipList;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -48,7 +46,8 @@ class SkipListBoundsStressTest {
     final int sampleChecks = Integer.getInteger("skiplist.stress.sampleChecks", 40_000);
     final int maxKeyLen = Integer.getInteger("skiplist.stress.maxKeyLen", 96);
 
-    Header[] inserted = new Header[total];
+    MemorySegment[] insertedKeys = new MemorySegment[total];
+    long[] insertedSNs = new long[total];
 
     for (int i = 0; i < total; i++) {
       byte[] keyBytes = buildKeyBytes(i, maxKeyLen);
@@ -56,47 +55,48 @@ class SkipListBoundsStressTest {
       keySegment.copyFrom(MemorySegment.ofArray(keyBytes));
 
       long sn = i + 1L;
-      Header header = new Header(keyBytes.length, keySegment, sn, (byte) 1);
-      Footer footer = createFooter("v-" + i);
+      MemorySegment valueSeg = createValue("v-" + i);
 
-      skipList.insert(header, footer);
-      inserted[i] = header;
+      skipList.insert(keySegment, sn, (byte) 1, valueSeg);
+      insertedKeys[i] = keySegment;
+      insertedSNs[i] = sn;
 
       if ((i & 4095) == 0) {
-        int off = skipList.get(header);
+        int off = skipList.get(keySegment, sn);
         assertNotEquals(-1, off, "inserted key must be retrievable at i=" + i);
       }
     }
 
     for (int i = 0; i < total; i++) {
-      int off = skipList.get(inserted[i]);
+      int off = skipList.get(insertedKeys[i], insertedSNs[i]);
       assertNotEquals(-1, off, "missing key at index=" + i);
     }
 
     Random rnd = new Random(123456789L);
     for (int i = 0; i < sampleChecks; i++) {
       int index = rnd.nextInt(total);
-      Header header = inserted[index];
+      MemorySegment key = insertedKeys[index];
+      long sn = insertedSNs[index];
 
-      int foundOffset = skipList.get(header);
+      int foundOffset = skipList.get(key, sn);
       assertNotEquals(-1, foundOffset, "random probe must find inserted key idx=" + index);
 
       int coldOffset = readColdOffsetFromHotNode(foundOffset);
       assertEquals(index + 1L, coldArena.readLong(coldOffset), "SN must match inserted SN");
-      assertEquals(header.keySize(), coldArena.readInt(coldOffset + 12), "key size mismatch");
+      assertEquals(key.byteSize(), coldArena.readInt(coldOffset + 12), "key size mismatch");
 
       int valueSize = coldArena.readInt(coldOffset + 16);
-      MemorySegment value = coldArena.readBytes(coldOffset + 20 + header.keySize(), valueSize);
+      MemorySegment value = coldArena.readBytes(coldOffset + 20 + (int) key.byteSize(), valueSize);
       String actualValue = new String(value.toArray(ValueLayout.JAVA_BYTE), StandardCharsets.UTF_8);
       assertEquals("v-" + index, actualValue, "value bytes mismatch");
     }
   }
 
-  private Footer createFooter(String valueStr) {
+  private MemorySegment createValue(String valueStr) {
     byte[] valueBytes = valueStr.getBytes(StandardCharsets.UTF_8);
     MemorySegment valueSegment = testScope.allocate(valueBytes.length);
     valueSegment.copyFrom(MemorySegment.ofArray(valueBytes));
-    return new Footer(valueBytes.length, valueSegment);
+    return valueSegment;
   }
 
   private int readColdOffsetFromHotNode(int nodeOffset) {

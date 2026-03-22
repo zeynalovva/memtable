@@ -1,8 +1,6 @@
 package az.zeynalov.tests;
 
 import az.zeynalov.memtable.Arena;
-import az.zeynalov.memtable.Footer;
-import az.zeynalov.memtable.Header;
 import az.zeynalov.memtable.SkipList;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -83,7 +81,7 @@ class SkipListRigorousConcurrencyTest {
         for (int i = 0; i < keysPerThread; i++) {
           int id = base + i;
           String key = "unique-k-" + id;
-          skipList.insert(createHeader(key, 1L, (byte) 1), createFooter("value-" + id));
+          skipList.insert(createKey(key), 1L, (byte) 1, createValue("value-" + id));
         }
         return null;
       });
@@ -98,7 +96,8 @@ class SkipListRigorousConcurrencyTest {
 
     for (int i = 0; i < totalKeys; i++) {
       String key = "unique-k-" + i;
-      int off = skipList.get(createHeader(key, 1L, (byte) 1));
+      MemorySegment keySeg = createKey(key);
+      int off = skipList.get(keySeg, 1L);
       assertNotEquals(-1, off, "Missing key after concurrent insert: " + key);
       assertEquals(key, readKey(off), "Corrupted key bytes for key=" + key);
     }
@@ -121,7 +120,7 @@ class SkipListRigorousConcurrencyTest {
       admissibleValues.add(value);
       tasks.add(() -> {
         start.await();
-        skipList.insert(createHeader(key, id + 1L, (byte) 1), createFooter(value));
+        skipList.insert(createKey(key), id + 1L, (byte) 1, createValue(value));
         return null;
       });
     }
@@ -130,7 +129,8 @@ class SkipListRigorousConcurrencyTest {
       start.await();
       long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
       while (System.nanoTime() < until) {
-        int off = skipList.get(createHeader(key, Long.MAX_VALUE, (byte) 1));
+        MemorySegment keySeg = createKey(key);
+        int off = skipList.get(keySeg, Long.MAX_VALUE);
         if (off == -1) {
           continue;
         }
@@ -146,8 +146,8 @@ class SkipListRigorousConcurrencyTest {
 
     runTasksWithTimeout(pool, tasks, 30);
     assertNull(readerFailure.get(), "Reader observed corrupted value under contention");
-
-    int finalOff = skipList.get(createHeader(key, Long.MAX_VALUE, (byte) 1));
+    MemorySegment finalKeySeg = createKey(key);
+    int finalOff = skipList.get(finalKeySeg, Long.MAX_VALUE);
     assertNotEquals(-1, finalOff, "Hot key must exist after writers complete");
     String finalValue = readValue(finalOff);
     assertTrue(admissibleValues.contains(finalValue),
@@ -179,7 +179,7 @@ class SkipListRigorousConcurrencyTest {
           String key = "mix-k-" + k;
           long sn = ((long) writerId << 32) | j;
           String value = "mix-v-" + writerId + "-" + j;
-          skipList.insert(createHeader(key, sn, (byte) 1), createFooter(value));
+          skipList.insert(createKey(key), sn, (byte) 1, createValue(value));
           committed.merge(key, sn, Math::max);
         }
         return null;
@@ -192,7 +192,8 @@ class SkipListRigorousConcurrencyTest {
         ThreadLocalRandom rnd = ThreadLocalRandom.current();
         while (!stop.get()) {
           String key = "mix-k-" + rnd.nextInt(keySpace);
-          int off = skipList.get(createHeader(key, Long.MAX_VALUE, (byte) 1));
+          MemorySegment keySeg = createKey(key);
+          int off = skipList.get(keySeg, Long.MAX_VALUE);
           if (off != -1) {
             readKey(off);
             readValue(off);
@@ -240,7 +241,8 @@ class SkipListRigorousConcurrencyTest {
     assertNull(failure.get(), "Unexpected exception under mixed workload");
 
     for (String key : committed.keySet()) {
-      int off = skipList.get(createHeader(key, Long.MAX_VALUE, (byte) 1));
+      MemorySegment keySeg = createKey(key);
+      int off = skipList.get(keySeg, Long.MAX_VALUE);
       assertNotEquals(-1, off, "Committed key missing after mixed workload: " + key);
       assertEquals(key, readKey(off), "Key bytes corrupted for key=" + key);
     }
@@ -270,9 +272,10 @@ class SkipListRigorousConcurrencyTest {
             long sn = ((long) tid << 32) | i;
             String value = "hot-v-" + tid + "-" + i;
             validValues.add(value);
-            skipList.insert(createHeader(key, sn, (byte) 1), createFooter(value));
+            skipList.insert(createKey(key), sn, (byte) 1, createValue(value));
           } else {
-            int off = skipList.get(createHeader(key, Long.MAX_VALUE, (byte) 1));
+            MemorySegment keySeg = createKey(key);
+            int off = skipList.get(keySeg, Long.MAX_VALUE);
             if (off != -1) {
               String observedValue = readValue(off);
               if (!validValues.contains(observedValue)) {
@@ -310,18 +313,18 @@ class SkipListRigorousConcurrencyTest {
     assertTrue(pool.awaitTermination(5, TimeUnit.SECONDS), "Executor did not terminate in time");
   }
 
-  private Header createHeader(String keyStr, long SN, byte type) {
+  private MemorySegment createKey(String keyStr) {
     byte[] keyBytes = keyStr.getBytes(StandardCharsets.UTF_8);
     MemorySegment keySegment = testScope.allocate(keyBytes.length);
     keySegment.copyFrom(MemorySegment.ofArray(keyBytes));
-    return new Header(keyBytes.length, keySegment, SN, type);
+    return keySegment;
   }
 
-  private Footer createFooter(String valueStr) {
+  private MemorySegment createValue(String valueStr) {
     byte[] valueBytes = valueStr.getBytes(StandardCharsets.UTF_8);
     MemorySegment valueSegment = testScope.allocate(valueBytes.length);
     valueSegment.copyFrom(MemorySegment.ofArray(valueBytes));
-    return new Footer(valueBytes.length, valueSegment);
+    return valueSegment;
   }
 
   private String readKey(int nodeOffset) {

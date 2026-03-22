@@ -46,50 +46,6 @@ public class Arena implements AutoCloseable {
     return alignedOffset;
   }
 
-  public long readVarint(int offset) {
-    int value = 0;
-    int shift = 0;
-    int currentOffset = offset;
-    int bytesRead = 0;
-
-    while (true) {
-      if (currentOffset >= ALLOCATED_MEMORY_SIZE) {
-        throw ArenaCapacityException.of(ErrorMessage.ARENA_SIZE_MISMATCH);
-      }
-
-      byte b = memory.get(ValueLayout.JAVA_BYTE, currentOffset);
-      currentOffset++;
-      bytesRead++;
-
-      value |= (b & 0x7F) << shift;
-
-      if ((b & 0x80) == 0) {
-        return pack(value, bytesRead);
-      }
-
-      shift += 7;
-
-      if (shift >= 35) {
-        throw ArenaCapacityException.of(ErrorMessage.ARENA_LARGE_VARINT);
-      }
-    }
-  }
-
-  public void writeVarint(int offset, int value) {
-    int currentOffset = offset;
-
-    while (true) {
-      if ((value & ~0x7F) == 0) {
-        memory.set(ValueLayout.JAVA_BYTE, currentOffset, (byte) value);
-        return;
-      } else {
-        memory.set(ValueLayout.JAVA_BYTE, currentOffset, (byte) ((value & 0x7F) | 0x80));
-        value >>>= 7;
-        currentOffset++;
-      }
-    }
-  }
-
   public MemorySegment getMemory() {
     return memory;
   }
@@ -137,7 +93,4 @@ public class Arena implements AutoCloseable {
     }
   }
 
-  private long pack(int a, int b) {
-    return ((long) a << 32) | (b & 0xFFFFFFFFL);
-  }
 }
