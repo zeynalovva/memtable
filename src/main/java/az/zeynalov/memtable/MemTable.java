@@ -21,6 +21,15 @@ public class MemTable {
     skipList.insert(key, SN, type, value);
   }
 
+  /**
+   * Returns a byte array containing the key/value size and the key/value bytes for the current position of the iterator.
+   * The format of the returned byte array is as follows:
+   * - 4 bytes for the key size (int)
+   * - 4 bytes for the value size (int)
+   * - key bytes (key size)
+   * - value bytes (value size)
+   */
+
   public byte[] get(MemTableIterator iterator) {
     if (!iterator.isValid()) {
       return null;
