@@ -210,12 +210,12 @@ public class SkipList {
   public int compareKeyOnly(int nodeOffset, long targetPrefix, MemorySegment targetKey) {
     long sourcePrefix = hotArena.readLong(nodeOffset);
 
-    int comparison = Long.compareUnsigned(sourcePrefix, targetPrefix);
+    int comparison = Long.compareUnsigned(targetPrefix, sourcePrefix);
     if (comparison != 0) {
       return comparison;
     }
 
-    return compareRawKeys(nodeOffset, targetKey);
+    return compareRawKeys(nodeOffset, targetKey) * -1;
   }
 
   private int compareRawKeys(int nodeOffset, MemorySegment targetKey) {
